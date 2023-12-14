@@ -24,6 +24,7 @@
 /compile_commands.json
 /fuzz_out/
 /out*
+/target
 /ui/dist
 /venv/*
 perf.data*
@@ -33,3 +34,4 @@ examples/sdk/build/
 GPATH
 GRTAGS
 GTAGS
+Cargo.lock
