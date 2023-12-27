@@ -7,7 +7,7 @@ description = "generates rust bindings to protocol buffers defined by perfetto"
 repository = "https://github.com/a6f/perfetto_protos"
 include = [
     "**/*.rs",
-    "**/*.proto",
+    "protos/**/*.proto",
     "Cargo.toml",
 ]
 
