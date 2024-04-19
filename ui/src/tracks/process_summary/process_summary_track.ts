@@ -12,72 +12,107 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import {v4 as uuidv4} from 'uuid';
+
 import {BigintMath} from '../../base/bigint_math';
 import {assertFalse} from '../../base/logging';
 import {duration, Time, time} from '../../base/time';
-import {colorForTid} from '../../common/colorizer';
-import {TrackAdapter, TrackControllerAdapter} from '../../common/track_adapter';
+import {colorForTid} from '../../core/colorizer';
 import {LIMIT, TrackData} from '../../common/track_data';
+import {EngineProxy, TimelineFetcher} from '../../common/track_helper';
 import {checkerboardExcept} from '../../frontend/checkerboard';
 import {globals} from '../../frontend/globals';
 import {PanelSize} from '../../frontend/panel';
-import {NewTrackArgs} from '../../frontend/track';
+import {Track} from '../../public';
 import {NUM} from '../../trace_processor/query_result';
 
 export const PROCESS_SUMMARY_TRACK = 'ProcessSummaryTrack';
 
 // TODO(dproy): Consider deduping with CPU summary data.
-export interface Data extends TrackData {
+interface Data extends TrackData {
   bucketSize: duration;
   utilizations: Float64Array;
 }
 
 export interface Config {
   pidForColor: number;
-  upid: number|null;
+  upid: number | null;
   utid: number;
 }
 
-// This is the summary displayed when a process only contains chrome slices
-// and no cpu scheduling.
-export class ProcessSummaryTrackController extends
-    TrackControllerAdapter<Config, Data> {
-  async onSetup(): Promise<void> {
-    await this.query(
-        `create virtual table ${this.tableName('window')} using window;`);
+const MARGIN_TOP = 5;
+const RECT_HEIGHT = 30;
+const TRACK_HEIGHT = MARGIN_TOP * 2 + RECT_HEIGHT;
+const SUMMARY_HEIGHT = TRACK_HEIGHT - MARGIN_TOP;
+
+export class ProcessSummaryTrack implements Track {
+  private fetcher = new TimelineFetcher<Data>(this.onBoundsChange.bind(this));
+  private engine: EngineProxy;
+  private uuid = uuidv4();
+  private config: Config;
+
+  constructor(engine: EngineProxy, config: Config) {
+    this.engine = engine;
+    this.config = config;
+  }
+
+  // Returns a valid SQL table name with the given prefix that should be unique
+  // for each track.
+  private tableName(prefix: string) {
+    // Derive table name from, since that is unique for each track.
+    // Track ID can be UUID but '-' is not valid for sql table name.
+    const idSuffix = this.uuid.split('-').join('_');
+    return `${prefix}_${idSuffix}`;
+  }
+
+  async onCreate(): Promise<void> {
+    await this.engine.query(
+      `create virtual table ${this.tableName('window')} using window;`,
+    );
 
     let utids = [this.config.utid];
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
     if (this.config.upid) {
-      const threadQuery = await this.query(
-          `select utid from thread where upid=${this.config.upid}`);
+      const threadQuery = await this.engine.query(
+        `select utid from thread where upid=${this.config.upid}`,
+      );
       utids = [];
       for (const it = threadQuery.iter({utid: NUM}); it.valid(); it.next()) {
         utids.push(it.utid);
       }
     }
 
-    const trackQuery = await this.query(
-        `select id from thread_track where utid in (${utids.join(',')})`);
+    const trackQuery = await this.engine.query(
+      `select id from thread_track where utid in (${utids.join(',')})`,
+    );
     const tracks = [];
     for (const it = trackQuery.iter({id: NUM}); it.valid(); it.next()) {
       tracks.push(it.id);
     }
 
     const processSliceView = this.tableName('process_slice_view');
-    await this.query(
-        `create view ${processSliceView} as ` +
+    await this.engine.query(
+      `create view ${processSliceView} as ` +
         // 0 as cpu is a dummy column to perform span join on.
         `select ts, dur/${utids.length} as dur ` +
         `from slice s ` +
         `where depth = 0 and track_id in ` +
-        `(${tracks.join(',')})`);
-    await this.query(`create virtual table ${this.tableName('span')}
+        `(${tracks.join(',')})`,
+    );
+    await this.engine.query(`create virtual table ${this.tableName('span')}
         using span_join(${processSliceView},
                         ${this.tableName('window')});`);
   }
 
-  async onBoundsChange(start: time, end: time, resolution: duration):
-      Promise<Data> {
+  async onUpdate(): Promise<void> {
+    this.fetcher.requestDataForCurrentTime();
+  }
+
+  async onBoundsChange(
+    start: time,
+    end: time,
+    resolution: duration,
+  ): Promise<Data> {
     assertFalse(resolution === 0n, 'Resolution cannot be 0');
 
     // |resolution| is in ns/px we want # ns for 10px window:
@@ -86,7 +121,7 @@ export class ProcessSummaryTrackController extends
     const windowStart = Time.quant(start, bucketSize);
     const windowDur = BigintMath.max(1n, end - windowStart);
 
-    await this.query(`update ${this.tableName('window')} set
+    await this.engine.query(`update ${this.tableName('window')} set
       window_start=${windowStart},
       window_dur=${windowDur},
       quantum=${bucketSize}
@@ -96,8 +131,11 @@ export class ProcessSummaryTrackController extends
   }
 
   private async computeSummary(
-      start: time, end: time, resolution: duration,
-      bucketSize: duration): Promise<Data> {
+    start: time,
+    end: time,
+    resolution: duration,
+    bucketSize: duration,
+  ): Promise<Data> {
     const duration = end - start;
     const numBuckets = Math.min(Number(duration / bucketSize), LIMIT);
 
@@ -117,7 +155,7 @@ export class ProcessSummaryTrackController extends
       utilizations: new Float64Array(numBuckets),
     };
 
-    const queryRes = await this.query(query);
+    const queryRes = await this.engine.query(query);
     const it = queryRes.iter({bucket: NUM, utilization: NUM});
     for (; it.valid(); it.next()) {
       const bucket = it.bucket;
@@ -132,41 +170,32 @@ export class ProcessSummaryTrackController extends
 
   async onDestroy(): Promise<void> {
     if (this.engine.isAlive) {
-      await this.engine.query(`drop table if exists ${
-          this.tableName(
-              'window')}; drop table if exists ${this.tableName('span')}`);
+      await this.engine.query(
+        `drop table if exists ${this.tableName(
+          'window',
+        )}; drop table if exists ${this.tableName('span')}`,
+      );
     }
-  }
-}
-
-const MARGIN_TOP = 5;
-const RECT_HEIGHT = 30;
-const TRACK_HEIGHT = MARGIN_TOP * 2 + RECT_HEIGHT;
-const SUMMARY_HEIGHT = TRACK_HEIGHT - MARGIN_TOP;
-
-export class ProcessSummaryTrack extends TrackAdapter<Config, Data> {
-  constructor(args: NewTrackArgs) {
-    super(args);
+    this.fetcher.dispose();
   }
 
   getHeight(): number {
     return TRACK_HEIGHT;
   }
 
-  renderCanvas(ctx: CanvasRenderingContext2D, size: PanelSize): void {
-    const {
-      visibleTimeScale,
-    } = globals.timeline;
-    const data = this.data();
-    if (data === undefined) return;  // Can't possibly draw anything.
+  render(ctx: CanvasRenderingContext2D, size: PanelSize): void {
+    const {visibleTimeScale} = globals.timeline;
+    const data = this.fetcher.data;
+    if (data === undefined) return; // Can't possibly draw anything.
 
     checkerboardExcept(
-        ctx,
-        this.getHeight(),
-        0,
-        size.width,
-        visibleTimeScale.timeToPx(data.start),
-        visibleTimeScale.timeToPx(data.end));
+      ctx,
+      this.getHeight(),
+      0,
+      size.width,
+      visibleTimeScale.timeToPx(data.start),
+      visibleTimeScale.timeToPx(data.end),
+    );
 
     this.renderSummary(ctx, data);
   }

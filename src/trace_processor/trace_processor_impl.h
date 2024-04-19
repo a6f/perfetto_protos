@@ -20,33 +20,26 @@
 #include <sqlite3.h>
 
 #include <atomic>
-#include <functional>
-#include <map>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "perfetto/ext/base/flat_hash_map.h"
-#include "perfetto/ext/base/string_view.h"
+#include "perfetto/base/status.h"
 #include "perfetto/trace_processor/basic_types.h"
-#include "perfetto/trace_processor/status.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
 #include "perfetto/trace_processor/trace_processor.h"
+#include "src/trace_processor/iterator_impl.h"
+#include "src/trace_processor/metrics/metrics.h"
 #include "src/trace_processor/perfetto_sql/engine/perfetto_sql_engine.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/create_function.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/create_view_function.h"
-#include "src/trace_processor/perfetto_sql/intrinsics/functions/import.h"
-#include "src/trace_processor/sqlite/db_sqlite_table.h"
-#include "src/trace_processor/sqlite/query_cache.h"
-#include "src/trace_processor/sqlite/scoped_db.h"
-#include "src/trace_processor/sqlite/sqlite_engine.h"
 #include "src/trace_processor/trace_processor_storage_impl.h"
-#include "src/trace_processor/util/sql_modules.h"
-
-#include "src/trace_processor/metrics/metrics.h"
 #include "src/trace_processor/util/descriptors.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 // Coordinates the loading of traces from an arbitrary source and allows
 // execution of SQL queries on the events in these traces.
@@ -110,7 +103,8 @@ class TraceProcessorImpl : public TraceProcessor,
 
   template <typename Table>
   void RegisterStaticTable(const Table& table) {
-    engine_->RegisterStaticTable(table, Table::Name());
+    engine_->RegisterStaticTable(table, Table::Name(),
+                                 Table::ComputeStaticSchema());
   }
 
   bool IsRootMetricField(const std::string& metric_name);
@@ -129,10 +123,8 @@ class TraceProcessorImpl : public TraceProcessor,
   // to prevent single-flow compiler optimizations in ExecuteQuery().
   std::atomic<bool> query_interrupted_{false};
 
-  // Keeps track of the tables created by the ingestion process. This is used
-  // by RestoreInitialTables() to delete all the tables/view that have been
-  // created after that point.
-  std::vector<std::string> initial_tables_;
+  // Track the number of objects registered with SQLite after the constructor.
+  uint64_t sqlite_objects_post_constructor_initialization_ = 0;
 
   std::string current_trace_name_;
   uint64_t bytes_parsed_ = 0;
@@ -142,7 +134,6 @@ class TraceProcessorImpl : public TraceProcessor,
   bool notify_eof_called_ = false;
 };
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor
 
 #endif  // SRC_TRACE_PROCESSOR_TRACE_PROCESSOR_IMPL_H_

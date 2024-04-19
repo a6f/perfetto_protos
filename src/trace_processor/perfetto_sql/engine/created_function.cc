@@ -75,7 +75,7 @@ base::StatusOr<SqlValue> EvaluateScalarStatement(
   }
 
   SqlValue result =
-      sqlite_utils::SqliteValueToSqlValue(sqlite3_column_value(stmt, 0));
+      sqlite::utils::SqliteValueToSqlValue(sqlite3_column_value(stmt, 0));
 
   // If we return a bytes type but have a null pointer, SQLite will convert this
   // to an SQL null. However, for proto build functions, we actively want to
@@ -205,7 +205,7 @@ class Memoizer {
     if (argc != 1) {
       return std::nullopt;
     }
-    SqlValue arg = sqlite_utils::SqliteValueToSqlValue(argv[0]);
+    SqlValue arg = sqlite::utils::SqliteValueToSqlValue(argv[0]);
     if (arg.type != SqlValue::Type::kLong) {
       return std::nullopt;
     }
@@ -431,11 +431,11 @@ class State : public CreatedFunction::Context {
   // Prepare a statement and push it into the stack of allocated statements
   // for this function.
   base::Status PrepareStatement() {
-    base::StatusOr<SqliteEngine::PreparedStatement> stmt =
+    SqliteEngine::PreparedStatement stmt =
         engine_->sqlite_engine()->PrepareStatement(*sql_);
     RETURN_IF_ERROR(stmt.status());
     is_valid_ = true;
-    stmts_.push_back(std::move(stmt.value()));
+    stmts_.push_back(std::move(stmt));
     return base::OkStatus();
   }
 
@@ -581,6 +581,15 @@ std::unique_ptr<CreatedFunction::Context> CreatedFunction::MakeContext(
   return std::make_unique<State>(engine);
 }
 
+bool CreatedFunction::IsValid(Context* ctx) {
+  return static_cast<State*>(ctx)->is_valid();
+}
+
+void CreatedFunction::Reset(Context* ctx, PerfettoSqlEngine* engine) {
+  ctx->~Context();
+  new (ctx) State(engine);
+}
+
 base::Status CreatedFunction::Run(CreatedFunction::Context* ctx,
                                   size_t argc,
                                   sqlite3_value** argv,
@@ -602,7 +611,7 @@ base::Status CreatedFunction::Run(CreatedFunction::Context* ctx,
   for (size_t i = 0; i < argc; ++i) {
     sqlite3_value* arg = argv[i];
     sql_argument::Type type = state->prototype().arguments[i].type();
-    base::Status status = sqlite_utils::TypeCheckSqliteValue(
+    base::Status status = sqlite::utils::TypeCheckSqliteValue(
         arg, sql_argument::TypeToSqlValueType(type),
         sql_argument::TypeToHumanFriendlyString(type));
     if (!status.ok()) {
@@ -677,39 +686,11 @@ base::Status CreatedFunction::VerifyPostConditions(
   return static_cast<State*>(ctx)->ValidateEmptyStatements();
 }
 
-base::Status CreatedFunction::ValidateOrPrepare(CreatedFunction::Context* ctx,
-                                                bool replace,
-                                                FunctionPrototype prototype,
-                                                sql_argument::Type return_type,
-                                                std::string return_type_str,
-                                                SqlSource source) {
+base::Status CreatedFunction::Prepare(CreatedFunction::Context* ctx,
+                                      FunctionPrototype prototype,
+                                      sql_argument::Type return_type,
+                                      SqlSource source) {
   State* state = static_cast<State*>(ctx);
-  if (state->is_valid() && !replace) {
-    // If the function already exists, just verify that the prototype, return
-    // type and SQL matches exactly with what we already had registered. By
-    // doing this, we can avoid the problem plaguing C++ macros where macro
-    // ordering determines which one gets run.
-    if (state->prototype() != prototype) {
-      return base::ErrStatus(
-          "CREATE_FUNCTION[prototype=%s]: function prototype changed",
-          prototype.ToString().c_str());
-    }
-    if (state->return_type() != return_type) {
-      return base::ErrStatus(
-          "CREATE_FUNCTION[prototype=%s]: return type changed from %s to %s",
-          prototype.ToString().c_str(),
-          sql_argument::TypeToHumanFriendlyString(state->return_type()),
-          return_type_str.c_str());
-    }
-    if (state->sql() != source.sql()) {
-      return base::ErrStatus(
-          "CREATE_FUNCTION[prototype=%s]: function SQL changed from %s to %s",
-          prototype.ToString().c_str(), state->sql().c_str(),
-          source.sql().c_str());
-    }
-    return base::OkStatus();
-  }
-
   state->Reset(std::move(prototype), return_type, std::move(source));
 
   // Ideally, we would unregister the function here if the statement prep

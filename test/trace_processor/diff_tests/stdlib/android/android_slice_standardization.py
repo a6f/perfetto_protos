@@ -29,6 +29,8 @@ trace.add_ftrace_packet(cpu=0)
 
 slices_to_standardize = [
     "Lock contention on thread list lock (owner tid: 1665)",
+    "Lock contention on thread suspend count lock (owner tid: 0)",
+    "Lock contention on a monitor lock (owner tid: 0)",
     "monitor contention with owner BG Thread #1 (30) at",
     "SuspendThreadByThreadId suspended Primes-1 id=19",
     "LoadApkAssetsFd({ParcelFileDescriptor: java.io.FileDescriptor@340019d})",
@@ -39,6 +41,13 @@ slices_to_standardize = [
     "/data/app/.../base.apk",
     "OpenDexFilesFromOat(/data/app/.../base.apk)",
     "Open oat file /data/misc/apexdata/com.android.art/dalvik-cache/boot.oat",
+    "android.os.Handler: kotlinx.coroutines.internal.DispatchedContinuation",
+    "GC: Wait For Completion Alloc",
+    'android.view.ViewRootImpl$ViewRootHandler: android.view.View$$Lambda4',
+    'android.os.AsyncTask$InternalHandler: #1',
+    'android.os.Handler: com.android.systemui.broadcast.ActionReceiver$1$1',
+    'com.android.keyguard.KeyguardUpdateMonitor$13: #302',
+    'android.os.Handler: com.android.systemui.qs.TileServiceManager$1',
 ]
 
 for name in slices_to_standardize:

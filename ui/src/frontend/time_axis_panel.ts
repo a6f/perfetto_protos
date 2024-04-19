@@ -14,12 +14,8 @@
 
 import m from 'mithril';
 
-import {
-  Time,
-  time,
-  toISODateOnly,
-} from '../base/time';
-import {TimestampFormat, timestampFormat} from '../common/timestamp_format';
+import {Time, time, toISODateOnly} from '../base/time';
+import {TimestampFormat, timestampFormat} from '../core/timestamp_format';
 
 import {TRACK_SHELL_WIDTH} from './css_constants';
 import {globals} from './globals';
@@ -40,7 +36,7 @@ export class TimeAxisPanel implements Panel {
 
   constructor(readonly key: string) {}
 
-  get mithril() {
+  render(): m.Children {
     return m('.time-axis-panel');
   }
 
@@ -60,10 +56,20 @@ export class TimeAxisPanel implements Panel {
         ctx.fillText('+', 6 + width + 2, 10, 6);
         break;
       case TimestampFormat.UTC:
-        const offsetDate =
-            Time.toDate(globals.utcOffset, globals.realtimeOffset);
+        const offsetDate = Time.toDate(
+          globals.utcOffset,
+          globals.realtimeOffset,
+        );
         const dateStr = toISODateOnly(offsetDate);
         ctx.fillText(`UTC ${dateStr}`, 6, 10);
+        break;
+      case TimestampFormat.TraceTz:
+        const offsetTzDate = Time.toDate(
+          globals.traceTzOffset,
+          globals.realtimeOffset,
+        );
+        const dateTzStr = toISODateOnly(offsetTzDate);
+        ctx.fillText(dateTzStr, 6, 10);
         break;
     }
 
@@ -94,15 +100,16 @@ export class TimeAxisPanel implements Panel {
 }
 
 function renderTimestamp(
-    ctx: CanvasRenderingContext2D,
-    time: time,
-    x: number,
-    y: number,
-    minWidth: number,
+  ctx: CanvasRenderingContext2D,
+  time: time,
+  x: number,
+  y: number,
+  minWidth: number,
 ) {
   const fmt = timestampFormat();
   switch (fmt) {
     case TimestampFormat.UTC:
+    case TimestampFormat.TraceTz:
     case TimestampFormat.Timecode:
       return renderTimecode(ctx, time, x, y, minWidth);
     case TimestampFormat.Raw:
@@ -119,11 +126,11 @@ function renderTimestamp(
 
 // Print a time on the canvas in raw format.
 function renderRawTimestamp(
-    ctx: CanvasRenderingContext2D,
-    time: string,
-    x: number,
-    y: number,
-    minWidth: number,
+  ctx: CanvasRenderingContext2D,
+  time: string,
+  x: number,
+  y: number,
+  minWidth: number,
 ) {
   ctx.font = '11px Roboto Condensed';
   ctx.fillText(time, x, y, minWidth);
@@ -135,12 +142,12 @@ function renderRawTimestamp(
 // mmm uuu nnn
 // Returns the resultant width of the timecode.
 function renderTimecode(
-    ctx: CanvasRenderingContext2D,
-    time: time,
-    x: number,
-    y: number,
-    minWidth: number,
-    ): number {
+  ctx: CanvasRenderingContext2D,
+  time: time,
+  x: number,
+  y: number,
+  minWidth: number,
+): number {
   const timecode = Time.toTimecode(time);
   ctx.font = '11px Roboto Condensed';
 

@@ -15,10 +15,11 @@
  */
 
 #include "src/trace_processor/importers/ftrace/ftrace_module_impl.h"
-#include "perfetto/base/build_config.h"
+
 #include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/ftrace/ftrace_parser.h"
 #include "src/trace_processor/importers/ftrace/ftrace_tokenizer.h"
+#include "src/trace_processor/importers/proto/proto_importer_module.h"
 
 #include "protos/perfetto/trace/trace_packet.pbzero.h"
 
@@ -47,9 +48,8 @@ ModuleResult FtraceModuleImpl::TokenizePacket(
           decoder.trusted_packet_sequence_id());
     }
     case TracePacket::kFtraceStatsFieldNumber: {
-      parser_.ParseFtraceStats(decoder.ftrace_stats(),
-                               decoder.trusted_packet_sequence_id());
-      return ModuleResult::Handled();
+      return parser_.ParseFtraceStats(decoder.ftrace_stats(),
+                                      decoder.trusted_packet_sequence_id());
     }
   }
   return ModuleResult::Ignored();

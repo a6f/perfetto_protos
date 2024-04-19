@@ -66,6 +66,10 @@ class TrackTracker {
   // Interns a given GPU track into the storage.
   TrackId InternGpuTrack(const tables::GpuTrackTable::Row& row);
 
+  // Interns a GPU work period track into the storage.
+  TrackId InternGpuWorkPeriodTrack(
+      const tables::GpuWorkPeriodTrackTable::Row& row);
+
   // Interns a legacy Chrome async event track into the storage.
   TrackId InternLegacyChromeAsyncTrack(StringId name,
                                        uint32_t upid,
@@ -118,15 +122,16 @@ class TrackTracker {
                                    int32_t consumer_id,
                                    StringId consumer_type,
                                    int32_t ordinal);
-  // Interns a per process energy counter track associated with a
-  // Energy into the storage.
-  TrackId InternUidCounterTrack(StringId name, int32_t uid);
 
   // Interns a per process energy consumer counter track associated with a
   // Energy Uid into the storage.
   TrackId InternEnergyPerUidCounterTrack(StringId name,
                                          int32_t consumer_id,
                                          int32_t uid);
+
+  // Interns a track associated with a Linux device (where a Linux device
+  // implies a kernel-level device managed by a Linux driver).
+  TrackId InternLinuxDeviceTrack(StringId name);
 
   // Creates a counter track associated with a GPU into the storage.
   TrackId CreateGpuCounterTrack(StringId name,
@@ -163,6 +168,17 @@ class TrackTracker {
              std::tie(r.track_name, r.scope, r.context_id);
     }
   };
+  struct GpuWorkPeriodTrackTuple {
+    StringId track_name;
+    uint32_t gpu_id;
+    int32_t uid;
+
+    friend bool operator<(const GpuWorkPeriodTrackTuple& l,
+                          const GpuWorkPeriodTrackTuple& r) {
+      return std::tie(l.track_name, l.gpu_id, l.uid) <
+             std::tie(r.track_name, r.gpu_id, r.uid);
+    }
+  };
   struct ChromeTrackTuple {
     std::optional<int64_t> upid;
     int64_t trace_id = 0;
@@ -190,6 +206,8 @@ class TrackTracker {
   std::map<GpuTrackTuple, TrackId> gpu_tracks_;
   std::map<ChromeTrackTuple, TrackId> chrome_tracks_;
   std::map<UniquePid, TrackId> chrome_process_instant_tracks_;
+  std::map<std::pair<StringId, int32_t /*uid*/>, TrackId> uid_tracks_;
+  std::map<GpuWorkPeriodTrackTuple, TrackId> gpu_work_period_tracks_;
 
   std::map<StringId, TrackId> global_counter_tracks_by_name_;
   std::map<std::pair<StringId, uint32_t>, TrackId> cpu_counter_tracks_;
@@ -202,6 +220,7 @@ class TrackTracker {
   std::map<std::pair<StringId, int32_t>, TrackId> uid_counter_tracks_;
   std::map<std::pair<StringId, int32_t>, TrackId>
       energy_per_uid_counter_tracks_;
+  std::map<StringId, TrackId> linux_device_tracks_;
 
   std::optional<TrackId> chrome_global_instant_track_id_;
   std::optional<TrackId> trigger_track_id_;

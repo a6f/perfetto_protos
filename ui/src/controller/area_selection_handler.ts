@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {Area, AreaById} from '../common/state';
+import {Area, AreaById, getLegacySelection} from '../common/state';
 import {globals} from '../frontend/globals';
 
 export class AreaSelectionHandler {
   private previousArea?: Area;
 
-  getAreaChange(): [boolean, AreaById|undefined] {
-    const currentSelection = globals.state.currentSelection;
+  getAreaChange(): [boolean, AreaById | undefined] {
+    const currentSelection = getLegacySelection(globals.state);
     if (currentSelection === null || currentSelection.kind !== 'AREA') {
       return [false, undefined];
     }
@@ -30,21 +30,25 @@ export class AreaSelectionHandler {
     // 2. The new area is undefined and the old area defined (viceversa from 1).
     // 3. Both areas are defined but their start or end times differ.
     // 4. Both areas are defined but their tracks differ.
-    let hasAreaChanged = (!!this.previousArea !== !!selectedArea);
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
+    let hasAreaChanged = !!this.previousArea !== !!selectedArea;
+    // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
     if (selectedArea && this.previousArea) {
       // There seems to be an issue with clang-format http://shortn/_Pt98d5MCjG
       // where `a ||= b` is formatted to `a || = b`, by inserting a space which
       // breaks the operator.
       // Therefore, we are using the pattern `a = a || b` instead.
       hasAreaChanged =
-          hasAreaChanged || selectedArea.start !== this.previousArea.start;
+        hasAreaChanged || selectedArea.start !== this.previousArea.start;
       hasAreaChanged =
-          hasAreaChanged || selectedArea.end !== this.previousArea.end;
-      hasAreaChanged = hasAreaChanged ||
-          selectedArea.tracks.length !== this.previousArea.tracks.length;
+        hasAreaChanged || selectedArea.end !== this.previousArea.end;
+      hasAreaChanged =
+        hasAreaChanged ||
+        selectedArea.tracks.length !== this.previousArea.tracks.length;
       for (let i = 0; i < selectedArea.tracks.length; ++i) {
-        hasAreaChanged = hasAreaChanged ||
-            selectedArea.tracks[i] !== this.previousArea.tracks[i];
+        hasAreaChanged =
+          hasAreaChanged ||
+          selectedArea.tracks[i] !== this.previousArea.tracks[i];
       }
     }
 

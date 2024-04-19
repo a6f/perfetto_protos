@@ -17,16 +17,24 @@
 #include "src/trace_processor/importers/ftrace/ftrace_tokenizer.h"
 
 #include "perfetto/base/logging.h"
+#include "perfetto/base/status.h"
 #include "perfetto/protozero/proto_decoder.h"
 #include "perfetto/protozero/proto_utils.h"
+#include "perfetto/trace_processor/basic_types.h"
+#include "src/trace_processor/importers/common/machine_tracker.h"
+#include "src/trace_processor/importers/common/metadata_tracker.h"
 #include "src/trace_processor/importers/proto/packet_sequence_state.h"
 #include "src/trace_processor/sorter/trace_sorter.h"
+#include "src/trace_processor/storage/metadata.h"
 #include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/types/variadic.h"
+#include "src/trace_processor/util/status_macros.h"
 
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
 #include "protos/perfetto/trace/ftrace/ftrace_event.pbzero.h"
 #include "protos/perfetto/trace/ftrace/ftrace_event_bundle.pbzero.h"
+#include "protos/perfetto/trace/ftrace/power.pbzero.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -119,13 +127,20 @@ base::Status FtraceTokenizer::TokenizeFtraceBundle(
         cpu, kMaxCpuCount);
   }
 
+  if (PERFETTO_UNLIKELY(decoder.lost_events())) {
+    // If set, it means that the kernel overwrote an unspecified number of
+    // events since our last read from the per-cpu buffer.
+    context_->storage->SetIndexedStats(stats::ftrace_cpu_has_data_loss,
+                                       static_cast<int>(cpu), 1);
+  }
+
   ClockTracker::ClockId clock_id;
   switch (decoder.ftrace_clock()) {
     case FtraceClock::FTRACE_CLOCK_UNSPECIFIED:
       clock_id = BuiltinClock::BUILTIN_CLOCK_BOOTTIME;
       break;
     case FtraceClock::FTRACE_CLOCK_GLOBAL:
-      clock_id = ClockTracker::SeqenceToGlobalClock(
+      clock_id = ClockTracker::SequenceToGlobalClock(
           packet_sequence_id, kFtraceGlobalClockIdForOldKernels);
       break;
     case FtraceClock::FTRACE_CLOCK_MONO_RAW:
@@ -151,6 +166,39 @@ base::Status FtraceTokenizer::TokenizeFtraceBundle(
   for (auto it = decoder.event(); it; ++it) {
     TokenizeFtraceEvent(cpu, clock_id, bundle.slice(it->data(), it->size()),
                         state);
+  }
+
+  // First bundle on each cpu is special since ftrace is recorded in per-cpu
+  // buffers. In traces written by perfetto v44+ we know the timestamp from
+  // which this cpu's data stream is valid. This is important for parsing ring
+  // buffer traces, as not all per-cpu data streams will be valid from the same
+  // timestamp.
+  if (cpu >= per_cpu_seen_first_bundle_.size()) {
+    per_cpu_seen_first_bundle_.resize(cpu + 1);
+  }
+  if (!per_cpu_seen_first_bundle_[cpu]) {
+    per_cpu_seen_first_bundle_[cpu] = true;
+
+    // if this cpu's timestamp is the new max, update the metadata table entry
+    if (decoder.has_last_read_event_timestamp()) {
+      int64_t timestamp = 0;
+      ASSIGN_OR_RETURN(
+          timestamp,
+          ResolveTraceTime(
+              context_, clock_id,
+              static_cast<int64_t>(decoder.last_read_event_timestamp())));
+
+      std::optional<SqlValue> curr_latest_timestamp =
+          context_->metadata_tracker->GetMetadata(
+              metadata::ftrace_latest_data_start_ns);
+
+      if (!curr_latest_timestamp.has_value() ||
+          timestamp > curr_latest_timestamp->AsLong()) {
+        context_->metadata_tracker->SetMetadata(
+            metadata::ftrace_latest_data_start_ns,
+            Variadic::Integer(timestamp));
+      }
+    }
   }
   return base::OkStatus();
 }
@@ -209,23 +257,32 @@ void FtraceTokenizer::TokenizeFtraceEvent(uint32_t cpu,
         break;
       }
     }
-    if (PERFETTO_UNLIKELY(!event_id)) {
-      context_->storage->IncrementStats(stats::ftrace_bundle_tokenizer_errors);
+    if (PERFETTO_UNLIKELY(event_id == 0)) {
+      context_->storage->IncrementStats(stats::ftrace_missing_event_id);
       return;
     }
   }
 
-  // ClockTracker will increment some error stats if it failed to convert the
-  // timestamp so just return.
+  if (PERFETTO_UNLIKELY(
+          event_id == protos::pbzero::FtraceEvent::kGpuWorkPeriodFieldNumber)) {
+    TokenizeFtraceGpuWorkPeriod(cpu, std::move(event), state);
+    return;
+  }
+
   int64_t int64_timestamp = static_cast<int64_t>(raw_timestamp);
   base::StatusOr<int64_t> timestamp =
       ResolveTraceTime(context_, clock_id, int64_timestamp);
+
+  // ClockTracker will increment some error stats if it failed to convert the
+  // timestamp so just return.
   if (!timestamp.ok()) {
     DlogWithLimit(timestamp.status());
     return;
   }
+
   context_->sorter->PushFtraceEvent(cpu, *timestamp, std::move(event),
-                                    state->current_generation());
+                                    state->current_generation(),
+                                    context_->machine_id());
 }
 
 PERFETTO_ALWAYS_INLINE
@@ -285,7 +342,8 @@ void FtraceTokenizer::TokenizeFtraceCompactSchedSwitch(
       DlogWithLimit(timestamp.status());
       return;
     }
-    context_->sorter->PushInlineFtraceEvent(cpu, *timestamp, event);
+    context_->sorter->PushInlineFtraceEvent(cpu, *timestamp, event,
+                                            context_->machine_id());
   }
 
   // Check that all packed buffers were decoded correctly, and fully.
@@ -341,7 +399,8 @@ void FtraceTokenizer::TokenizeFtraceCompactSchedWaking(
       DlogWithLimit(timestamp.status());
       return;
     }
-    context_->sorter->PushInlineFtraceEvent(cpu, *timestamp, event);
+    context_->sorter->PushInlineFtraceEvent(cpu, *timestamp, event,
+                                            context_->machine_id());
   }
 
   // Check that all packed buffers were decoded correctly, and fully.
@@ -360,12 +419,54 @@ void FtraceTokenizer::HandleFtraceClockSnapshot(int64_t ftrace_ts,
     return;
   latest_ftrace_clock_snapshot_ts_ = ftrace_ts;
 
-  ClockTracker::ClockId global_id = ClockTracker::SeqenceToGlobalClock(
+  ClockTracker::ClockId global_id = ClockTracker::SequenceToGlobalClock(
       packet_sequence_id, kFtraceGlobalClockIdForOldKernels);
   context_->clock_tracker->AddSnapshot(
       {ClockTracker::ClockTimestamp(global_id, ftrace_ts),
        ClockTracker::ClockTimestamp(BuiltinClock::BUILTIN_CLOCK_BOOTTIME,
                                     boot_ts)});
+}
+
+void FtraceTokenizer::TokenizeFtraceGpuWorkPeriod(uint32_t cpu,
+                                                  TraceBlobView event,
+                                                  PacketSequenceState* state) {
+  // Special handling of valid gpu_work_period tracepoint events which contain
+  // timestamp values for the GPU time period nested inside the event data.
+  const uint8_t* data = event.data();
+  const size_t length = event.length();
+
+  ProtoDecoder decoder(data, length);
+  auto ts_field =
+      decoder.FindField(protos::pbzero::FtraceEvent::kGpuWorkPeriodFieldNumber);
+  if (!ts_field.valid()) {
+    context_->storage->IncrementStats(stats::ftrace_bundle_tokenizer_errors);
+    return;
+  }
+
+  protos::pbzero::GpuWorkPeriodFtraceEvent::Decoder gpu_work_event(
+      ts_field.data(), ts_field.size());
+  if (!gpu_work_event.has_start_time_ns()) {
+    context_->storage->IncrementStats(stats::ftrace_bundle_tokenizer_errors);
+    return;
+  }
+  uint64_t raw_timestamp = gpu_work_event.start_time_ns();
+
+  // Enforce clock type for the event data to be CLOCK_MONOTONIC_RAW
+  // as specified, to calculate the timestamp correctly.
+  int64_t int64_timestamp = static_cast<int64_t>(raw_timestamp);
+  base::StatusOr<int64_t> timestamp = ResolveTraceTime(
+      context_, BuiltinClock::BUILTIN_CLOCK_MONOTONIC_RAW, int64_timestamp);
+
+  // ClockTracker will increment some error stats if it failed to convert the
+  // timestamp so just return.
+  if (!timestamp.ok()) {
+    DlogWithLimit(timestamp.status());
+    return;
+  }
+
+  context_->sorter->PushFtraceEvent(cpu, *timestamp, std::move(event),
+                                    state->current_generation(),
+                                    context_->machine_id());
 }
 
 }  // namespace trace_processor

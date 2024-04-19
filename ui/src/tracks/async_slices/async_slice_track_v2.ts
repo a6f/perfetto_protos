@@ -19,11 +19,14 @@ import {Slice} from '../../public';
 
 export class AsyncSliceTrackV2 extends NamedSliceTrack {
   constructor(
-      args: NewTrackArgs, maxDepth: number, private trackIds: number[]) {
+    args: NewTrackArgs,
+    maxDepth: number,
+    private trackIds: number[],
+  ) {
     super(args);
     this.sliceLayout = {
       ...SLICE_LAYOUT_FIT_CONTENT_DEFAULTS,
-      minDepth: maxDepth + 1,
+      depthGuess: maxDepth,
     };
   }
 
@@ -43,7 +46,7 @@ export class AsyncSliceTrackV2 extends NamedSliceTrack {
 
   onUpdatedSlices(slices: Slice[]) {
     for (const slice of slices) {
-      slice.isHighlighted = (slice === this.hoveredSlice);
+      slice.isHighlighted = slice === this.hoveredSlice;
     }
   }
 }

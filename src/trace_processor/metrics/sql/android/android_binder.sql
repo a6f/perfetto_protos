@@ -39,6 +39,8 @@ SELECT AndroidBinderMetric(
     SELECT RepeatedField(
       AndroidBinderMetric_UnaggregatedTxnBreakdown(
         'aidl_name', aidl_name,
+        'aidl_ts', aidl_ts,
+        'aidl_dur', aidl_dur,
         'client_process', client_process,
         'client_thread', client_thread,
         'is_main_thread', is_main_thread,
@@ -55,6 +57,12 @@ SELECT AndroidBinderMetric(
         'server_pid', server_pid,
         'server_oom_score', server_oom_score,
         'is_sync', is_sync,
+        'client_monotonic_dur', client_monotonic_dur,
+        'server_monotonic_dur', server_monotonic_dur,
+        'client_package_version_code', client_package_version_code,
+        'server_package_version_code', server_package_version_code,
+        'is_client_package_debuggable', is_client_package_debuggable,
+        'is_server_package_debuggable', is_server_package_debuggable,
         'thread_states', (
           SELECT RepeatedField(
             AndroidBinderMetric_ThreadStateBreakdown(

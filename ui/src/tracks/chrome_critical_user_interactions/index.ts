@@ -17,13 +17,17 @@ import {v4 as uuidv4} from 'uuid';
 import {Actions} from '../../common/actions';
 import {SCROLLING_TRACK_GROUP} from '../../common/state';
 import {OnSliceClickArgs} from '../../frontend/base_slice_track';
-import {GenericSliceDetailsTab} from '../../frontend/generic_slice_details_tab';
+import {
+  GenericSliceDetailsTab,
+  GenericSliceDetailsTabConfig,
+} from '../../frontend/generic_slice_details_tab';
 import {globals} from '../../frontend/globals';
 import {
   NAMED_ROW,
   NamedSliceTrackTypes,
 } from '../../frontend/named_slice_track';
 import {
+  BottomTabToSCSAdapter,
   NUM,
   Plugin,
   PluginContext,
@@ -42,9 +46,10 @@ import {
 
 import {PageLoadDetailsPanel} from './page_load_details_panel';
 import {StartupDetailsPanel} from './startup_details_panel';
+import {WebContentInteractionPanel} from './web_content_interaction_details_panel';
 
 export const CRITICAL_USER_INTERACTIONS_KIND =
-    'org.chromium.CriticalUserInteraction.track';
+  'org.chromium.CriticalUserInteraction.track';
 
 export const CRITICAL_USER_INTERACTIONS_ROW = {
   ...NAMED_ROW,
@@ -58,8 +63,8 @@ export interface CriticalUserInteractionSlice extends Slice {
   type: string;
 }
 
-export interface CriticalUserInteractionSliceTrackTypes extends
-    NamedSliceTrackTypes {
+export interface CriticalUserInteractionSliceTrackTypes
+  extends NamedSliceTrackTypes {
   slice: CriticalUserInteractionSlice;
   row: CriticalUserInteractionRow;
 }
@@ -68,22 +73,25 @@ enum CriticalUserInteractionType {
   UNKNOWN = 'Unknown',
   PAGE_LOAD = 'chrome_page_loads',
   STARTUP = 'chrome_startups',
+  WEB_CONTENT_INTERACTION = 'chrome_web_content_interactions',
 }
 
-function convertToCriticalUserInteractionType(cujType: string):
-    CriticalUserInteractionType {
+function convertToCriticalUserInteractionType(
+  cujType: string,
+): CriticalUserInteractionType {
   switch (cujType) {
     case CriticalUserInteractionType.PAGE_LOAD:
       return CriticalUserInteractionType.PAGE_LOAD;
     case CriticalUserInteractionType.STARTUP:
       return CriticalUserInteractionType.STARTUP;
+    case CriticalUserInteractionType.WEB_CONTENT_INTERACTION:
+      return CriticalUserInteractionType.WEB_CONTENT_INTERACTION;
     default:
       return CriticalUserInteractionType.UNKNOWN;
   }
 }
 
-export class CriticalUserInteractionTrack extends
-    CustomSqlTableSliceTrack<CriticalUserInteractionSliceTrackTypes> {
+export class CriticalUserInteractionTrack extends CustomSqlTableSliceTrack<CriticalUserInteractionSliceTrackTypes> {
   static readonly kind = CRITICAL_USER_INTERACTIONS_KIND;
 
   getSqlDataSource(): CustomSqlTableDefConfig {
@@ -104,8 +112,8 @@ export class CriticalUserInteractionTrack extends
   }
 
   getDetailsPanel(
-      args: OnSliceClickArgs<CriticalUserInteractionSliceTrackTypes['slice']>):
-      CustomSqlDetailsPanelConfig {
+    args: OnSliceClickArgs<CriticalUserInteractionSliceTrackTypes['slice']>,
+  ): CustomSqlDetailsPanelConfig {
     let detailsPanel = {
       kind: GenericSliceDetailsTab.kind,
       config: {
@@ -133,6 +141,15 @@ export class CriticalUserInteractionTrack extends
           },
         };
         break;
+      case CriticalUserInteractionType.WEB_CONTENT_INTERACTION:
+        detailsPanel = {
+          kind: WebContentInteractionPanel.kind,
+          config: {
+            sqlTableName: this.tableName,
+            title: 'Chrome Web Content Interaction',
+          },
+        };
+        break;
       default:
         break;
     }
@@ -140,19 +157,22 @@ export class CriticalUserInteractionTrack extends
   }
 
   onSliceClick(
-      args: OnSliceClickArgs<CriticalUserInteractionSliceTrackTypes['slice']>) {
+    args: OnSliceClickArgs<CriticalUserInteractionSliceTrackTypes['slice']>,
+  ) {
     const detailsPanelConfig = this.getDetailsPanel(args);
-    globals.makeSelection(Actions.selectGenericSlice({
-      id: args.slice.scopedId,
-      sqlTableName: this.tableName,
-      start: args.slice.ts,
-      duration: args.slice.dur,
-      trackKey: this.trackKey,
-      detailsPanelConfig: {
-        kind: detailsPanelConfig.kind,
-        config: detailsPanelConfig.config,
-      },
-    }));
+    globals.makeSelection(
+      Actions.selectGenericSlice({
+        id: args.slice.scopedId,
+        sqlTableName: this.tableName,
+        start: args.slice.ts,
+        duration: args.slice.dur,
+        trackKey: this.trackKey,
+        detailsPanelConfig: {
+          kind: detailsPanelConfig.kind,
+          config: detailsPanelConfig.config,
+        },
+      }),
+    );
   }
 
   getSqlImports(): CustomSqlImportConfig {
@@ -165,8 +185,9 @@ export class CriticalUserInteractionTrack extends
     return CRITICAL_USER_INTERACTIONS_ROW;
   }
 
-  rowToSlice(row: CriticalUserInteractionSliceTrackTypes['row']):
-      CriticalUserInteractionSliceTrackTypes['slice'] {
+  rowToSlice(
+    row: CriticalUserInteractionSliceTrackTypes['row'],
+  ): CriticalUserInteractionSliceTrackTypes['slice'] {
     const baseSlice = super.rowToSlice(row);
     const scopedId = row.scopedId;
     const type = row.type;
@@ -190,13 +211,74 @@ export function addCriticalUserInteractionTrack() {
 
 class CriticalUserInteractionPlugin implements Plugin {
   async onTraceLoad(ctx: PluginContextTrace): Promise<void> {
-    ctx.registerStaticTrack({
+    ctx.registerTrack({
       uri: CriticalUserInteractionTrack.kind,
       kind: CriticalUserInteractionTrack.kind,
       displayName: 'Chrome Interactions',
-      track: (trackCtx) => new CriticalUserInteractionTrack(
-          {engine: ctx.engine, trackKey: trackCtx.trackKey}),
+      trackFactory: (trackCtx) =>
+        new CriticalUserInteractionTrack({
+          engine: ctx.engine,
+          trackKey: trackCtx.trackKey,
+        }),
     });
+
+    ctx.registerDetailsPanel(
+      new BottomTabToSCSAdapter({
+        tabFactory: (selection) => {
+          if (
+            selection.kind === 'GENERIC_SLICE' &&
+            selection.detailsPanelConfig.kind === PageLoadDetailsPanel.kind
+          ) {
+            const config = selection.detailsPanelConfig.config;
+            return new PageLoadDetailsPanel({
+              config: config as GenericSliceDetailsTabConfig,
+              engine: ctx.engine,
+              uuid: uuidv4(),
+            });
+          }
+          return undefined;
+        },
+      }),
+    );
+
+    ctx.registerDetailsPanel(
+      new BottomTabToSCSAdapter({
+        tabFactory: (selection) => {
+          if (
+            selection.kind === 'GENERIC_SLICE' &&
+            selection.detailsPanelConfig.kind === StartupDetailsPanel.kind
+          ) {
+            const config = selection.detailsPanelConfig.config;
+            return new StartupDetailsPanel({
+              config: config as GenericSliceDetailsTabConfig,
+              engine: ctx.engine,
+              uuid: uuidv4(),
+            });
+          }
+          return undefined;
+        },
+      }),
+    );
+
+    ctx.registerDetailsPanel(
+      new BottomTabToSCSAdapter({
+        tabFactory: (selection) => {
+          if (
+            selection.kind === 'GENERIC_SLICE' &&
+            selection.detailsPanelConfig.kind ===
+              WebContentInteractionPanel.kind
+          ) {
+            const config = selection.detailsPanelConfig.config;
+            return new WebContentInteractionPanel({
+              config: config as GenericSliceDetailsTabConfig,
+              engine: ctx.engine,
+              uuid: uuidv4(),
+            });
+          }
+          return undefined;
+        },
+      }),
+    );
   }
 
   onActivate(ctx: PluginContext): void {
