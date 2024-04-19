@@ -1,3 +1,7 @@
+# perfetto_protos
+
+Rust structs for the perfetto trace protobufs
+
 # Perfetto - System profiling, app tracing and trace analysis
 
 Perfetto is a production-grade open-source stack for performance
