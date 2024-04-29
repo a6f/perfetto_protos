@@ -8,7 +8,7 @@ repository = "https://github.com/a6f/perfetto_protos"
 readme = "README-crate.md"
 include = [
     "**/*.rs",
-    "**/*.proto",
+    "protos/**/*.proto",
     "Cargo.toml",
 ]
 
