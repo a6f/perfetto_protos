@@ -19,13 +19,12 @@
 
 #include <stdint.h>
 
-#include <unordered_map>
+#include <memory>
+#include <type_traits>
 #include <vector>
 
 #include "perfetto/base/compiler.h"
 #include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
-#include "src/trace_processor/importers/proto/stack_profile_tracker.h"
-#include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/types/trace_processor_context.h"
 #include "src/trace_processor/util/interned_message_view.h"
 
@@ -35,9 +34,8 @@ namespace trace_processor {
 class PacketSequenceState {
  public:
   explicit PacketSequenceState(TraceProcessorContext* context)
-      : context_(context), sequence_stack_profile_tracker_(context) {
-    current_generation_.reset(
-        new PacketSequenceStateGeneration(this, generation_index_++));
+      : context_(context) {
+    current_generation_.reset(new PacketSequenceStateGeneration(this));
   }
 
   int64_t IncrementAndGetTrackEventTimeNs(int64_t delta_ns) {
@@ -76,8 +74,7 @@ class PacketSequenceState {
     // sequence. Add a new generation with the updated defaults but the
     // current generation's interned data state.
     current_generation_.reset(new PacketSequenceStateGeneration(
-        this, generation_index_++, current_generation_->interned_data_,
-        std::move(defaults)));
+        this, current_generation_.get(), std::move(defaults)));
   }
 
   void SetThreadDescriptor(int32_t pid,
@@ -102,15 +99,10 @@ class PacketSequenceState {
   // Starts a new generation with clean-slate incremental state and defaults.
   void OnIncrementalStateCleared() {
     packet_loss_ = false;
-    current_generation_.reset(
-        new PacketSequenceStateGeneration(this, generation_index_++));
+    current_generation_.reset(new PacketSequenceStateGeneration(this));
   }
 
   bool IsIncrementalStateValid() const { return !packet_loss_; }
-
-  SequenceStackProfileTracker& sequence_stack_profile_tracker() {
-    return sequence_stack_profile_tracker_;
-  }
 
   // Returns a ref-counted ptr to the current generation.
   RefPtr<PacketSequenceStateGeneration> current_generation() const {
@@ -130,8 +122,6 @@ class PacketSequenceState {
 
  private:
   TraceProcessorContext* context_;
-
-  size_t generation_index_ = 0;
 
   // If true, incremental state on the sequence is considered invalid until we
   // see the next packet with incremental_state_cleared. We assume that we
@@ -159,18 +149,7 @@ class PacketSequenceState {
   int64_t track_event_thread_instruction_count_ = 0;
 
   RefPtr<PacketSequenceStateGeneration> current_generation_;
-  SequenceStackProfileTracker sequence_stack_profile_tracker_;
 };
-
-template <uint32_t FieldId, typename MessageType>
-typename MessageType::Decoder*
-PacketSequenceStateGeneration::LookupInternedMessage(uint64_t iid) {
-  auto* interned_message_view = GetInternedMessageView(FieldId, iid);
-  if (!interned_message_view)
-    return nullptr;
-
-  return interned_message_view->template GetOrCreateDecoder<MessageType>();
-}
 
 }  // namespace trace_processor
 }  // namespace perfetto

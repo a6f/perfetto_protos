@@ -1,6 +1,6 @@
 [package]
 name = "perfetto_protos"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Generates Rust bindings to Protocol Buffers defined by Perfetto"
@@ -16,8 +16,8 @@ include = [
 path = "protos.rs"
 
 [dependencies]
-protobuf = "3.3.0"
+protobuf = "3.4.0"
 
 [build-dependencies]
-protobuf-codegen = "3.3.0"
+protobuf-codegen = "3.4.0"
 protoc-bin-vendored = "3.0.0"

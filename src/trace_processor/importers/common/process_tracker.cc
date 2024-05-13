@@ -15,13 +15,22 @@
  */
 
 #include "src/trace_processor/importers/common/process_tracker.h"
-#include "src/trace_processor/storage/stats.h"
 
-#include <cinttypes>
+#include <algorithm>
+#include <cstdint>
+#include <optional>
 #include <utility>
+#include <vector>
 
-namespace perfetto {
-namespace trace_processor {
+#include "perfetto/base/logging.h"
+#include "perfetto/ext/base/string_view.h"
+#include "perfetto/public/compiler.h"
+#include "src/trace_processor/storage/stats.h"
+#include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/tables/metadata_tables_py.h"
+#include "src/trace_processor/types/trace_processor_context.h"
+
+namespace perfetto::trace_processor {
 
 ProcessTracker::ProcessTracker(TraceProcessorContext* context)
     : context_(context), args_tracker_(context) {
@@ -32,15 +41,25 @@ ProcessTracker::ProcessTracker(TraceProcessorContext* context)
   // tid0/pid0 to utid0/upid0. If other types of traces refer to tid0/pid0,
   // then they will get their own non-zero utid/upid, so that those threads are
   // still surfaced in embedder UIs.
-  tables::ThreadTable::Row thread_row;
-  thread_row.tid = 0u;
-  thread_row.upid = 0u;
-  thread_row.is_main_thread = true;
-  context_->storage->mutable_thread_table()->Insert(thread_row);
-
+  //
+  // Note on multi-machine tracing: utid/upid of the swapper process of
+  // secondary machine will not be 0. The ProcessTracker needs to insert to the
+  // thread and process tables to reserve utid and upid.
   tables::ProcessTable::Row process_row;
   process_row.pid = 0u;
-  context_->storage->mutable_process_table()->Insert(process_row);
+  process_row.machine_id = context_->machine_id();
+  auto upid =
+      context_->storage->mutable_process_table()->Insert(process_row).row;
+
+  tables::ThreadTable::Row thread_row;
+  thread_row.tid = 0u;
+  thread_row.upid = upid;  // The swapper upid may be != 0 for remote machines.
+  thread_row.is_main_thread = true;
+  thread_row.machine_id = context_->machine_id();
+  auto utid = context_->storage->mutable_thread_table()->Insert(thread_row).row;
+
+  swapper_upid_ = upid;
+  swapper_utid_ = utid;
 
   // An element to match the reserved tid = 0.
   thread_name_priorities_.push_back(ThreadNamePriority::kOther);
@@ -53,12 +72,20 @@ UniqueTid ProcessTracker::StartNewThread(std::optional<int64_t> timestamp,
   tables::ThreadTable::Row row;
   row.tid = tid;
   row.start_ts = timestamp;
+  row.machine_id = context_->machine_id();
 
   auto* thread_table = context_->storage->mutable_thread_table();
   UniqueTid new_utid = thread_table->Insert(row).row;
   tids_[tid].emplace_back(new_utid);
-  PERFETTO_DCHECK(thread_name_priorities_.size() == new_utid);
-  thread_name_priorities_.push_back(ThreadNamePriority::kOther);
+
+  if (PERFETTO_UNLIKELY(thread_name_priorities_.size() <= new_utid)) {
+    // This condition can happen in a multi-machine tracing session:
+    // Machine 1 gets utid 0, 1
+    // Machine 2 gets utid 2, 3
+    // Machine 1 gets utid 4: where thread_name_priorities_.size() == 2.
+    thread_name_priorities_.resize(new_utid + 1);
+  }
+  thread_name_priorities_[new_utid] = ThreadNamePriority::kOther;
   return new_utid;
 }
 
@@ -84,7 +111,7 @@ void ProcessTracker::EndThread(int64_t timestamp, uint32_t tid) {
   // Remove the thread from the list of threads being tracked as any event after
   // this one should be ignored.
   auto& vector = tids_[tid];
-  vector.erase(std::remove(vector.begin(), vector.end(), utid));
+  vector.erase(std::remove(vector.begin(), vector.end(), utid), vector.end());
 
   auto opt_upid = thread_table->upid()[utid];
   if (!opt_upid.has_value() || process_table->pid()[*opt_upid] != tid)
@@ -107,7 +134,8 @@ std::optional<UniqueTid> ProcessTracker::GetThreadOrNull(uint32_t tid) {
 
   // Ensure that the tid matches the tid we were looking for.
   PERFETTO_DCHECK(threads->tid()[utid] == tid);
-
+  // Ensure that the thread's machine ID matches the context's machine ID.
+  PERFETTO_DCHECK(threads->machine_id()[utid] == context_->machine_id());
   // If the thread is being tracked by the process tracker, it should not be
   // known to have ended.
   PERFETTO_DCHECK(!threads->end_ts()[utid].has_value());
@@ -135,6 +163,13 @@ void ProcessTracker::UpdateThreadNameByUtid(UniqueTid utid,
     return;
 
   auto* thread_table = context_->storage->mutable_thread_table();
+  if (PERFETTO_UNLIKELY(thread_name_priorities_.size() <= utid)) {
+    // This condition can happen in a multi-machine tracing session:
+    // Machine 1 gets utid 0, 1
+    // Machine 2 gets utid 2, 3
+    // Machine 1 gets utid 4: where thread_name_priorities_.size() == 2.
+    thread_name_priorities_.resize(utid + 1);
+  }
   if (priority >= thread_name_priorities_[utid]) {
     thread_table->mutable_name()->Set(utid, thread_name_id);
     thread_name_priorities_[utid] = priority;
@@ -161,11 +196,8 @@ bool ProcessTracker::IsThreadAlive(UniqueTid utid) {
 
   // If the process has been replaced in |pids_|, this thread is dead.
   uint32_t current_pid = processes->pid()[current_upid];
-  auto pid_it = pids_.Find(current_pid);
-  if (pid_it && *pid_it != current_upid)
-    return false;
-
-  return true;
+  auto* pid_it = pids_.Find(current_pid);
+  return !pid_it || *pid_it == current_upid;
 }
 
 std::optional<UniqueTid> ProcessTracker::GetThreadOrNull(
@@ -174,7 +206,7 @@ std::optional<UniqueTid> ProcessTracker::GetThreadOrNull(
   auto* threads = context_->storage->mutable_thread_table();
   auto* processes = context_->storage->mutable_process_table();
 
-  auto vector_it = tids_.Find(tid);
+  auto* vector_it = tids_.Find(tid);
   if (!vector_it)
     return std::nullopt;
 
@@ -214,6 +246,8 @@ UniqueTid ProcessTracker::UpdateThread(uint32_t tid, uint32_t pid) {
   // If no matching thread was found, create a new one.
   UniqueTid utid = opt_utid ? *opt_utid : StartNewThread(std::nullopt, tid);
   PERFETTO_DCHECK(thread_table->tid()[utid] == tid);
+  // Ensure that the thread's machine ID matches the context's machine ID.
+  PERFETTO_DCHECK(thread_table->machine_id()[utid] == context_->machine_id());
 
   // Find matching process or create new one.
   if (!thread_table->upid()[utid].has_value()) {
@@ -383,6 +417,7 @@ UniquePid ProcessTracker::GetOrCreateProcess(uint32_t pid) {
 
   tables::ProcessTable::Row row;
   row.pid = pid;
+  row.machine_id = context_->machine_id();
 
   UniquePid upid = process_table->Insert(row).row;
   *it_and_ins.first = upid;  // Update the newly inserted hashmap entry.
@@ -507,9 +542,9 @@ void ProcessTracker::AssociateThreadToProcess(UniqueTid utid, UniquePid upid) {
 }
 
 void ProcessTracker::SetPidZeroIsUpidZeroIdleProcess() {
-  // Create a mapping from (t|p)id 0 -> u(t|p)id 0 for the idle process.
-  tids_.Insert(0, std::vector<UniqueTid>{0});
-  pids_.Insert(0, UniquePid{0});
+  // Create a mapping from (t|p)id 0 -> u(t|p)id for the idle process.
+  tids_.Insert(0, std::vector<UniqueTid>{swapper_utid_});
+  pids_.Insert(0, swapper_upid_);
 
   auto swapper_id = context_->storage->InternString("swapper");
   UpdateThreadName(0, swapper_id, ThreadNamePriority::kTraceProcessorConstant);
@@ -547,5 +582,4 @@ void ProcessTracker::UpdateNamespacedThread(uint32_t pid,
   namespaced_threads_[tid] = {pid, tid, std::move(nstid)};
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

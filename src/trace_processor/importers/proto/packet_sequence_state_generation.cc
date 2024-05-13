@@ -15,11 +15,45 @@
  */
 
 #include "src/trace_processor/importers/proto/packet_sequence_state_generation.h"
+#include <cstddef>
 
 #include "src/trace_processor/importers/proto/packet_sequence_state.h"
+#include "src/trace_processor/storage/trace_storage.h"
 
 namespace perfetto {
 namespace trace_processor {
+
+PacketSequenceStateGeneration::PacketSequenceStateGeneration(
+    PacketSequenceState* state,
+    PacketSequenceStateGeneration* prev_gen,
+    TraceBlobView defaults)
+    : state_(state),
+      interned_data_(prev_gen->interned_data_),
+      trace_packet_defaults_(InternedMessageView(std::move(defaults))),
+      trackers_(prev_gen->trackers_) {
+  for (auto& t : trackers_) {
+    if (t.get() != nullptr) {
+      t->set_generation(this);
+    }
+  }
+}
+
+PacketSequenceStateGeneration::InternedDataTracker::~InternedDataTracker() =
+    default;
+
+bool PacketSequenceStateGeneration::pid_and_tid_valid() const {
+  return state_->pid_and_tid_valid();
+}
+int32_t PacketSequenceStateGeneration::pid() const {
+  return state_->pid();
+}
+int32_t PacketSequenceStateGeneration::tid() const {
+  return state_->tid();
+}
+
+TraceProcessorContext* PacketSequenceStateGeneration::GetContext() const {
+  return state_->context();
+}
 
 void PacketSequenceStateGeneration::InternMessage(uint32_t field_id,
                                                   TraceBlobView message) {
@@ -67,6 +101,36 @@ InternedMessageView* PacketSequenceStateGeneration::GetInternedMessageView(
   state_->context()->storage->IncrementStats(
       stats::interned_data_tokenizer_errors);
   return nullptr;
+}
+
+int64_t PacketSequenceStateGeneration::IncrementAndGetTrackEventTimeNs(
+    int64_t delta_ns) {
+  return state_->IncrementAndGetTrackEventTimeNs(delta_ns);
+}
+int64_t PacketSequenceStateGeneration::IncrementAndGetTrackEventThreadTimeNs(
+    int64_t delta_ns) {
+  return state_->IncrementAndGetTrackEventThreadTimeNs(delta_ns);
+}
+int64_t
+PacketSequenceStateGeneration::IncrementAndGetTrackEventThreadInstructionCount(
+    int64_t delta) {
+  return state_->IncrementAndGetTrackEventThreadInstructionCount(delta);
+}
+bool PacketSequenceStateGeneration::track_event_timestamps_valid() const {
+  return state_->track_event_timestamps_valid();
+}
+void PacketSequenceStateGeneration::SetThreadDescriptor(
+    int32_t pid,
+    int32_t tid,
+    int64_t timestamp_ns,
+    int64_t thread_timestamp_ns,
+    int64_t thread_instruction_count) {
+  state_->SetThreadDescriptor(pid, tid, timestamp_ns, thread_timestamp_ns,
+                              thread_instruction_count);
+}
+
+bool PacketSequenceStateGeneration::IsIncrementalStateValid() const {
+  return state_->IsIncrementalStateValid();
 }
 
 }  // namespace trace_processor

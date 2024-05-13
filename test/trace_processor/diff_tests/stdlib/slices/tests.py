@@ -26,7 +26,7 @@ class Slices(TestSuite):
     return DiffTestBlueprint(
         trace=Path('trace.py'),
         query="""
-        INCLUDE PERFETTO MODULE common.slices;
+        INCLUDE PERFETTO MODULE slices.with_context;
 
         SELECT name, ts, dur, depth, thread_name, tid, process_name, pid
         FROM thread_slice;
@@ -40,7 +40,7 @@ class Slices(TestSuite):
     return DiffTestBlueprint(
         trace=Path('trace.py'),
         query="""
-        INCLUDE PERFETTO MODULE common.slices;
+        INCLUDE PERFETTO MODULE slices.with_context;
 
         SELECT name, ts, dur, depth, process_name, pid
         FROM process_slice;
@@ -54,10 +54,10 @@ class Slices(TestSuite):
     return DiffTestBlueprint(
         trace=Path('trace.py'),
         query="""
-        INCLUDE PERFETTO MODULE experimental.slices;
+        INCLUDE PERFETTO MODULE slices.slices;
 
         SELECT name, ts, dur, depth, thread_name, tid, process_name, pid
-        FROM experimental_slice_with_thread_and_process_info;
+        FROM _slice_with_thread_and_process_info;
       """,
         out=Csv("""
         "name","ts","dur","depth","thread_name","tid","process_name","pid"
@@ -67,99 +67,54 @@ class Slices(TestSuite):
       """))
 
   # Common functions
-  def test_has_descendant_slice_with_name_true(self):
-    return DiffTestBlueprint(
-        # We need a trace with a large number of non-chrome slices, so that the
-        # reliable range is affected by their filtering.
-        trace=DataPath('chrome_input_with_frame_view.pftrace'),
-        query="""
-        INCLUDE PERFETTO MODULE common.slices;
-
-        SELECT
-          HAS_DESCENDANT_SLICE_WITH_NAME(
-            (SELECT id from slice where dur = 46046000),
-            'SwapEndToPresentationCompositorFrame') AS has_descendant;
-        """,
-        out=Csv("""
-        "has_descendant"
-        1
-        """))
-
-  def test_has_descendant_slice_with_name_false(self):
-    return DiffTestBlueprint(
-        # We need a trace with a large number of non-chrome slices, so that the
-        # reliable range is affected by their filtering.
-        trace=DataPath('chrome_input_with_frame_view.pftrace'),
-        query="""
-        INCLUDE PERFETTO MODULE common.slices;
-
-        SELECT
-          HAS_DESCENDANT_SLICE_WITH_NAME(
-            (SELECT id from slice where dur = 11666000),
-            'SwapEndToPresentationCompositorFrame') AS has_descendant;
-        """,
-        out=Csv("""
-        "has_descendant"
-        0
-        """))
-
-  def test_descendant_slice_null(self):
-    return DiffTestBlueprint(
-        # We need a trace with a large number of non-chrome slices, so that the
-        # reliable range is affected by their filtering.
-        trace=DataPath('chrome_input_with_frame_view.pftrace'),
-        query="""
-        INCLUDE PERFETTO MODULE common.slices;
-
-        SELECT
-          DESCENDANT_SLICE_END(
-            (SELECT id from slice where dur = 11666000),
-            'SwapEndToPresentationCompositorFrame') AS end_ts;
-        """,
-        out=Csv("""
-        "end_ts"
-        "[NULL]"
-        """))
-
-  def test_descendant_slice(self):
-    return DiffTestBlueprint(
-        # We need a trace with a large number of non-chrome slices, so that the
-        # reliable range is affected by their filtering.
-        trace=DataPath('chrome_input_with_frame_view.pftrace'),
-        query="""
-        INCLUDE PERFETTO MODULE common.slices;
-
-        SELECT
-          DESCENDANT_SLICE_END(
-            (SELECT id from slice where dur = 46046000),
-            'SwapEndToPresentationCompositorFrame') AS end_ts;
-        """,
-        out=Csv("""
-        "end_ts"
-        174797566610797
-        """))
 
   def test_slice_flattened(self):
     return DiffTestBlueprint(
         trace=DataPath('chrome_input_with_frame_view.pftrace'),
         query="""
-        INCLUDE PERFETTO MODULE experimental.flat_slices;
+        INCLUDE PERFETTO MODULE slices.flat_slices;
 
         SELECT e.name, e.ts, e.dur, e.depth
-        FROM experimental_slice_flattened e
-        JOIN thread_track ON e.track_id = thread_track.id
-        JOIN thread USING(utid)
-        WHERE thread.tid = 30944;
+        FROM _slice_flattened e
+          JOIN thread_track ON e.track_id = thread_track.id
+          JOIN thread USING(utid)
+        WHERE thread.tid = 30196
+        LIMIT 10;
       """,
         out=Csv("""
         "name","ts","dur","depth"
-        "ThreadControllerImpl::RunTask",174793737042797,3937000,0
-        "ThreadControllerImpl::RunTask",174793741016797,5930000,0
-        "ThreadControllerImpl::RunTask",174793747000797,47000,0
-        "Receive mojo message",174793747047797,136000,1
-        "ThreadControllerImpl::RunTask",174793747183797,17000,0
-        "Looper.dispatch: android.os.Handler(Kx3@57873a8)",174793747546797,119000,0
-        "ThreadControllerImpl::RunTask",174796099970797,186000,0
-        "Looper.dispatch: jy3(null)",174800056530797,1368000,0
-        "ThreadControllerImpl::RunTask",174800107962797,132000,0
+        "EventForwarder::OnTouchEvent",1035865509936036,211000,0
+        "EventForwarder::OnTouchEvent",1035865510234036,48000,0
+        "EventForwarder::OnTouchEvent",1035865510673036,10000,0
+        "GestureProvider::OnTouchEvent",1035865510147036,87000,1
+        "RenderWidgetHostImpl::ForwardTouchEvent",1035865510282036,41000,1
+        "RenderWidgetHostImpl::ForwardTouchEvent",1035865510331036,16000,1
+        "RenderWidgetHostImpl::ForwardTouchEvent",1035865510670036,3000,1
+        "LatencyInfo.Flow",1035865510323036,8000,2
+        "PassthroughTouchEventQueue::QueueEvent",1035865510347036,30000,2
+        "PassthroughTouchEventQueue::QueueEvent",1035865510666036,4000,2
       """))
+
+  def test_thread_slice_cpu_time(self):
+    return DiffTestBlueprint(
+        trace=DataPath('example_android_trace_30s.pb'),
+        query="""
+        INCLUDE PERFETTO MODULE slices.cpu_time;
+
+        SELECT *
+        FROM thread_slice_cpu_time
+        LIMIT 10;
+        """,
+        out=Csv("""
+        "id","cpu_time"
+        0,178646
+        1,119740
+        2,58073
+        3,98698
+        4,121979
+        5,45000
+        6,35104
+        7,33333
+        8,46926
+        9,17865
+        """))

@@ -17,6 +17,7 @@
 #include "src/trace_processor/tables/android_tables_py.h"
 #include "src/trace_processor/tables/counter_tables_py.h"
 #include "src/trace_processor/tables/flow_tables_py.h"
+#include "src/trace_processor/tables/jit_tables_py.h"
 #include "src/trace_processor/tables/memory_tables_py.h"
 #include "src/trace_processor/tables/metadata_tables_py.h"
 #include "src/trace_processor/tables/profiler_tables_py.h"
@@ -24,6 +25,7 @@
 #include "src/trace_processor/tables/slice_tables_py.h"
 #include "src/trace_processor/tables/trace_proto_tables_py.h"
 #include "src/trace_processor/tables/track_tables_py.h"
+#include "src/trace_processor/tables/v8_tables_py.h"
 #include "src/trace_processor/tables/winscope_tables_py.h"
 
 namespace perfetto {
@@ -42,6 +44,10 @@ AndroidLogTable::~AndroidLogTable() = default;
 // counter_tables_py.h
 CounterTable::~CounterTable() = default;
 
+// jit_tables.py
+JitCodeTable::~JitCodeTable() = default;
+JitFrameTable::~JitFrameTable() = default;
+
 // metadata_tables_py.h
 RawTable::~RawTable() = default;
 FtraceEventTable::~FtraceEventTable() = default;
@@ -54,6 +60,7 @@ ThreadTable::~ThreadTable() = default;
 ProcessTable::~ProcessTable() = default;
 FiledescriptorTable::~FiledescriptorTable() = default;
 ClockSnapshotTable::~ClockSnapshotTable() = default;
+MachineTable::~MachineTable() = default;
 
 // profiler_tables_py.h
 StackProfileMappingTable::~StackProfileMappingTable() = default;
@@ -64,7 +71,7 @@ CpuProfileStackSampleTable::~CpuProfileStackSampleTable() = default;
 PerfSampleTable::~PerfSampleTable() = default;
 SymbolTable::~SymbolTable() = default;
 HeapProfileAllocationTable::~HeapProfileAllocationTable() = default;
-ExperimentalFlamegraphNodesTable::~ExperimentalFlamegraphNodesTable() = default;
+ExperimentalFlamegraphTable::~ExperimentalFlamegraphTable() = default;
 HeapGraphObjectTable::~HeapGraphObjectTable() = default;
 HeapGraphClassTable::~HeapGraphClassTable() = default;
 HeapGraphReferenceTable::~HeapGraphReferenceTable() = default;
@@ -93,6 +100,8 @@ ProcessTrackTable::~ProcessTrackTable() = default;
 ThreadTrackTable::~ThreadTrackTable() = default;
 CpuTrackTable::~CpuTrackTable() = default;
 GpuTrackTable::~GpuTrackTable() = default;
+UidTrackTable::~UidTrackTable() = default;
+GpuWorkPeriodTrackTable::~GpuWorkPeriodTrackTable() = default;
 CounterTrackTable::~CounterTrackTable() = default;
 ThreadCounterTrackTable::~ThreadCounterTrackTable() = default;
 ProcessCounterTrackTable::~ProcessCounterTrackTable() = default;
@@ -104,6 +113,7 @@ PerfCounterTrackTable::~PerfCounterTrackTable() = default;
 EnergyCounterTrackTable::~EnergyCounterTrackTable() = default;
 UidCounterTrackTable::~UidCounterTrackTable() = default;
 EnergyPerUidCounterTrackTable::~EnergyPerUidCounterTrackTable() = default;
+LinuxDeviceTrackTable::~LinuxDeviceTrackTable() = default;
 
 // trace_proto_tables_py.h
 ExperimentalProtoPathTable::~ExperimentalProtoPathTable() = default;
@@ -115,6 +125,16 @@ ProcessMemorySnapshotTable::~ProcessMemorySnapshotTable() = default;
 MemorySnapshotNodeTable::~MemorySnapshotNodeTable() = default;
 MemorySnapshotEdgeTable::~MemorySnapshotEdgeTable() = default;
 
+// v8_tables_py.h
+V8IsolateTable::~V8IsolateTable() = default;
+V8JsScriptTable::~V8JsScriptTable() = default;
+V8WasmScriptTable::~V8WasmScriptTable() = default;
+V8JsFunctionTable::~V8JsFunctionTable() = default;
+V8JsCodeTable::~V8JsCodeTable() = default;
+V8InternalCodeTable::~V8InternalCodeTable() = default;
+V8WasmCodeTable::~V8WasmCodeTable() = default;
+V8RegexpCodeTable::~V8RegexpCodeTable() = default;
+
 // winscope_tables_py.h
 SurfaceFlingerLayersSnapshotTable::~SurfaceFlingerLayersSnapshotTable() =
     default;
@@ -124,6 +144,7 @@ WindowManagerShellTransitionsTable::~WindowManagerShellTransitionsTable() =
     default;
 WindowManagerShellTransitionHandlersTable::
     ~WindowManagerShellTransitionHandlersTable() = default;
+ProtoLogTable::~ProtoLogTable() = default;
 
 }  // namespace tables
 

@@ -150,7 +150,6 @@ bool TrackEventInternal::Initialize(
     bool (*register_data_source)(const DataSourceDescriptor&)) {
   DataSourceDescriptor dsd;
   dsd.set_name("track_event");
-  dsd.set_no_flush(true);
 
   protozero::HeapBuffered<protos::pbzero::TrackEventDescriptor> ted;
   for (size_t i = 0; i < registry.category_count(); i++) {
@@ -536,7 +535,7 @@ EventContext TrackEventInternal::WriteEvent(
     bool on_current_thread_track) {
   PERFETTO_DCHECK(!incr_state->was_cleared);
   auto packet = NewTracePacket(trace_writer, incr_state, tls_state, timestamp);
-  EventContext ctx(std::move(packet), incr_state, &tls_state);
+  EventContext ctx(trace_writer, std::move(packet), incr_state, &tls_state);
 
   auto track_event = ctx.event();
   if (type != protos::pbzero::TrackEvent::TYPE_UNSPECIFIED)

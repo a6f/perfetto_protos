@@ -28,12 +28,13 @@
 #include "src/trace_processor/importers/common/args_translation_table.h"
 #include "src/trace_processor/importers/common/event_tracker.h"
 #include "src/trace_processor/importers/common/flow_tracker.h"
+#include "src/trace_processor/importers/common/machine_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
 #include "src/trace_processor/importers/json/json_utils.h"
 #include "src/trace_processor/importers/proto/packet_analyzer.h"
-#include "src/trace_processor/importers/proto/packet_sequence_state.h"
 #include "src/trace_processor/importers/proto/profile_packet_utils.h"
+#include "src/trace_processor/importers/proto/stack_profile_sequence_state.h"
 #include "src/trace_processor/importers/proto/track_event_tracker.h"
 #include "src/trace_processor/util/debug_annotation_parser.h"
 #include "src/trace_processor/util/proto_to_args_parser.h"
@@ -195,17 +196,15 @@ std::optional<base::Status> MaybeParseUnsymbolizedSourceLocation(
   }
   // Interned mapping_id loses it's meaning when the sequence ends. So we need
   // to get an id from stack_profile_mapping table.
-  ProfilePacketInternLookup intern_lookup(delegate.seq_state());
-  auto mapping_id =
-      delegate.seq_state()
-          ->state()
-          ->sequence_stack_profile_tracker()
-          .FindOrInsertMapping(decoder->mapping_id(), &intern_lookup);
-  if (!mapping_id) {
+  auto mapping = delegate.seq_state()
+                     ->GetOrCreate<StackProfileSequenceState>()
+                     ->FindOrInsertMapping(decoder->mapping_id());
+  if (!mapping) {
     return std::nullopt;
   }
   delegate.AddUnsignedInteger(
-      util::ProtoToArgsParser::Key(prefix + ".mapping_id"), mapping_id->value);
+      util::ProtoToArgsParser::Key(prefix + ".mapping_id"),
+      mapping->mapping_id().value);
   delegate.AddUnsignedInteger(util::ProtoToArgsParser::Key(prefix + ".rel_pc"),
                               decoder->rel_pc());
   return base::OkStatus();
@@ -477,11 +476,9 @@ class TrackEventParser::EventImporter {
             storage_->process_track_table().id().IndexOf(track_id_);
         if (process_track_row) {
           upid_ = storage_->process_track_table().upid()[*process_track_row];
-          if (sequence_state_->state()->pid_and_tid_valid()) {
-            uint32_t pid =
-                static_cast<uint32_t>(sequence_state_->state()->pid());
-            uint32_t tid =
-                static_cast<uint32_t>(sequence_state_->state()->tid());
+          if (sequence_state_->pid_and_tid_valid()) {
+            uint32_t pid = static_cast<uint32_t>(sequence_state_->pid());
+            uint32_t tid = static_cast<uint32_t>(sequence_state_->tid());
             UniqueTid utid_candidate = procs->UpdateThread(tid, pid);
             if (storage_->thread_table().upid()[utid_candidate] == upid_)
               legacy_passthrough_utid_ = utid_candidate;
@@ -495,17 +492,15 @@ class TrackEventParser::EventImporter {
               tracks->mutable_name()->Set(*track_index, name_id_);
           }
 
-          if (sequence_state_->state()->pid_and_tid_valid()) {
-            uint32_t pid =
-                static_cast<uint32_t>(sequence_state_->state()->pid());
-            uint32_t tid =
-                static_cast<uint32_t>(sequence_state_->state()->tid());
+          if (sequence_state_->pid_and_tid_valid()) {
+            uint32_t pid = static_cast<uint32_t>(sequence_state_->pid());
+            uint32_t tid = static_cast<uint32_t>(sequence_state_->tid());
             legacy_passthrough_utid_ = procs->UpdateThread(tid, pid);
           }
         }
       }
     } else {
-      bool pid_tid_state_valid = sequence_state_->state()->pid_and_tid_valid();
+      bool pid_tid_state_valid = sequence_state_->pid_and_tid_valid();
 
       // We have a 0-value |track_uuid|. Nevertheless, we should only fall back
       // if we have either no |track_uuid| specified at all or |track_uuid| was
@@ -524,8 +519,8 @@ class TrackEventParser::EventImporter {
           legacy_event_.has_tid_override() && pid_tid_state_valid;
 
       if (fallback_to_legacy_pid_tid_tracks) {
-        uint32_t pid = static_cast<uint32_t>(sequence_state_->state()->pid());
-        uint32_t tid = static_cast<uint32_t>(sequence_state_->state()->tid());
+        uint32_t pid = static_cast<uint32_t>(sequence_state_->pid());
+        uint32_t tid = static_cast<uint32_t>(sequence_state_->tid());
         if (legacy_event_.has_pid_override()) {
           pid = static_cast<uint32_t>(legacy_event_.pid_override());
           tid = static_cast<uint32_t>(-1);
@@ -1123,7 +1118,8 @@ class TrackEventParser::EventImporter {
       return util::ErrStatus("raw legacy event without thread association");
 
     RawId id = storage_->mutable_raw_table()
-                   ->Insert({ts_, parser_->raw_legacy_event_id_, 0, *utid_})
+                   ->Insert({ts_, parser_->raw_legacy_event_id_, 0, *utid_, 0,
+                             0, context_->machine_id()})
                    .id;
 
     auto inserter = context_->args_tracker->AddArgsTo(id);

@@ -137,8 +137,9 @@ static bool IsSingleCategoryEnabled(
     }
   }
 
-  // If nothing matched, enable the category by default.
-  return true;
+  // If nothing matched, the category is disabled by default. N.B. this behavior
+  // is different than the C++ TrackEvent API.
+  return false;
 }
 
 static bool IsRegisteredCategoryEnabled(
@@ -378,7 +379,6 @@ class TrackEvent
     DataSourceDescriptor GenerateDescriptorFromCategories() const {
       DataSourceDescriptor dsd;
       dsd.set_name("track_event");
-      dsd.set_no_flush(true);
 
       protozero::HeapBuffered<perfetto::protos::pbzero::TrackEventDescriptor>
           ted;
@@ -980,9 +980,10 @@ static void InstanceOp(
     track_uuid = uuid;
   }
 
+  perfetto::TraceWriterBase* trace_writer = ii->instance->trace_writer.get();
   {
     auto packet = NewTracePacketInternal(
-        ii->instance->trace_writer.get(), incr_state, track_event_tls, ts,
+        trace_writer, incr_state, track_event_tls, ts,
         perfetto::protos::pbzero::TracePacket::SEQ_NEEDS_INCREMENTAL_STATE);
     auto* track_event = packet->set_track_event();
     WriteTrackEvent(incr_state, track_event, cat, type, name, extra_data,
@@ -1005,7 +1006,7 @@ static void InstanceOp(
     }
   }
   if (PERFETTO_UNLIKELY(flush)) {
-    ii->instance->trace_writer->Flush();
+    trace_writer->Flush();
   }
 }
 

@@ -23,7 +23,7 @@ JOIN process USING(upid);
 
 DROP VIEW IF EXISTS uid_package_count;
 CREATE PERFETTO VIEW uid_package_count AS
-SELECT * FROM internal_uid_package_count;
+SELECT * FROM _uid_package_count;
 
 DROP VIEW IF EXISTS process_metadata;
 CREATE PERFETTO VIEW process_metadata AS
@@ -56,7 +56,7 @@ FROM process_metadata_table
 LEFT JOIN upid_packages USING (upid);
 
 -- Given a process name, return if it is debuggable.
-CREATE PERFETTO FUNCTION is_process_debuggable(process_name STRING)
+CREATE OR REPLACE PERFETTO FUNCTION is_process_debuggable(process_name STRING)
 RETURNS BOOL AS
 SELECT p.debuggable
 FROM process_metadata_table p

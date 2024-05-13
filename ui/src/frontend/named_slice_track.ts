@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {Actions} from '../common/actions';
-import {
-  getColorForSlice,
-} from '../common/colorizer';
+import {getColorForSlice} from '../core/colorizer';
 import {STR_NULL} from '../trace_processor/query_result';
 
 import {
@@ -24,9 +21,12 @@ import {
   BaseSliceTrackTypes,
   OnSliceClickArgs,
   OnSliceOverArgs,
+  SLICE_FLAGS_INCOMPLETE,
+  SLICE_FLAGS_INSTANT,
 } from './base_slice_track';
 import {globals} from './globals';
 import {NewTrackArgs} from './track';
+import {renderDuration} from './widgets/duration';
 
 export const NAMED_ROW = {
   // Base columns (tsq, ts, dur, id, depth).
@@ -42,8 +42,8 @@ export interface NamedSliceTrackTypes extends BaseSliceTrackTypes {
 }
 
 export abstract class NamedSliceTrack<
-    T extends NamedSliceTrackTypes = NamedSliceTrackTypes> extends
-    BaseSliceTrack<T> {
+  T extends NamedSliceTrackTypes = NamedSliceTrackTypes,
+> extends BaseSliceTrack<T> {
   constructor(args: NewTrackArgs) {
     super(args);
   }
@@ -63,19 +63,31 @@ export abstract class NamedSliceTrack<
   }
 
   onSliceOver(args: OnSliceOverArgs<T['slice']>) {
-    const name = args.slice.title;
-    args.tooltip = [name];
+    const {title, dur, flags} = args.slice;
+    let duration;
+    if (flags & SLICE_FLAGS_INCOMPLETE) {
+      duration = 'Incomplete';
+    } else if (flags & SLICE_FLAGS_INSTANT) {
+      duration = 'Instant';
+    } else {
+      duration = renderDuration(dur);
+    }
+    args.tooltip = [`${title} - [${duration}]`];
   }
 
   onSliceClick(args: OnSliceClickArgs<T['slice']>) {
-    globals.makeSelection(Actions.selectChromeSlice({
-      id: args.slice.id,
-      trackKey: this.trackKey,
-
-      // |table| here can be either 'slice' or 'annotation'. The
-      // AnnotationSliceTrack overrides the onSliceClick and sets this to
-      // 'annotation'
-      table: 'slice',
-    }));
+    globals.setLegacySelection(
+      {
+        kind: 'CHROME_SLICE',
+        id: args.slice.id,
+        trackKey: this.trackKey,
+        table: 'slice',
+      },
+      {
+        clearSearch: true,
+        pendingScrollId: undefined,
+        switchToCurrentSelectionTab: true,
+      },
+    );
   }
 }

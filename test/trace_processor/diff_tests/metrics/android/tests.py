@@ -111,7 +111,7 @@ class AndroidMetrics(TestSuite):
 
   def test_binder_metric(self):
     return DiffTestBlueprint(
-        trace=DataPath('android_binder_metric_trace.atr'),
+        trace=DataPath('sched_wakeup_trace.atr'),
         query=Metric('android_binder'),
         out=Path('android_binder_metric.out'))
 
@@ -120,6 +120,12 @@ class AndroidMetrics(TestSuite):
         trace=Path('android_blocking_calls_cuj_metric.py'),
         query=Metric('android_blocking_calls_cuj_metric'),
         out=Path('android_blocking_calls_cuj_metric.out'))
+
+  def test_android_blocking_calls_unagg(self):
+    return DiffTestBlueprint(
+        trace=Path('android_blocking_calls_cuj_metric.py'),
+        query=Metric('android_blocking_calls_unagg'),
+        out=Path('android_blocking_calls_unagg.out'))
 
   def test_android_blocking_calls_on_jank_cujs(self):
     return DiffTestBlueprint(
@@ -188,16 +194,9 @@ class AndroidMetrics(TestSuite):
 
   def test_android_boot(self):
     return DiffTestBlueprint(
-        trace=DataPath('android_boot.pftrace'),
+        trace=DataPath('android_postboot_unlock.pftrace'),
         query=Metric('android_boot'),
-        out=TextProto(r"""
-        android_boot {
-          system_server_durations {
-            total_dur: 267193980530
-            uninterruptible_sleep_dur: 3843119529
-          }
-        }
-        """))
+        out=Path('android_boot.out'))
 
   def test_ad_services_metric(self):
     return DiffTestBlueprint(
@@ -206,13 +205,133 @@ class AndroidMetrics(TestSuite):
         out=TextProto(r"""
          ad_services_metric {
            ui_metric {
-             latency: 0.0003
+             consent_manager_initialization_latency: 0.0003
+             consent_manager_read_latency: 0.00015
            }
            app_set_id_metric {
              latency: 0.0001
            }
            ad_id_metric {
-             latency:0.0003
+             latency: 0.0003
+           }
+           odp_metric {
+             managing_service_initialization_latency: 0.00005
+             service_delegate_execute_flow_latency: 0.0001
+             service_delegate_request_surface_package_latency: 0.00015
+             service_delegate_register_web_trigger_latency: 0.0002
            }
          }
         """))
+
+  def test_android_boot_unagg(self):
+    return DiffTestBlueprint(
+      trace=DataPath('android_postboot_unlock.pftrace'),
+      query=Metric("android_boot_unagg"),
+      out=Path('android_boot_unagg.out')
+    )
+
+  def test_android_app_process_starts(self):
+    return DiffTestBlueprint(
+      trace=DataPath('android_postboot_unlock.pftrace'),
+      query=Metric("android_app_process_starts"),
+      out=Path('android_app_process_starts.out')
+    )
+
+  def test_android_garbage_collection(self):
+    return DiffTestBlueprint(
+        trace=DataPath('android_postboot_unlock.pftrace'),
+        query=Metric('android_garbage_collection_unagg'),
+        out=Path('android_garbage_collection_unagg.out'))
+
+  def test_android_auto_multiuser_switch(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_events {
+            cpu: 2
+            event {
+              timestamp: 1000000000
+              pid: 4032
+              print {
+                buf: "S|5993|UserController.startUser-10-fg-start-mode-1|0\n"
+              }
+            }
+          }
+        }
+        packet {
+          ftrace_events {
+            cpu: 2
+            event {
+              timestamp: 2000000000
+              pid: 4065
+              print {
+                buf: "S|2608|launching: com.android.car.carlauncher|0\n"
+              }
+            }
+          }
+        }
+        packet {
+          ftrace_events {
+            cpu: 2
+            event {
+              timestamp: 3000000000
+              pid: 4032
+              print {
+                buf: "S|5993|UserController.startUser-11-fg-start-mode-1|0\n"
+              }
+            }
+          }
+        }
+        packet {
+          ftrace_events {
+            cpu: 2
+            event {
+              timestamp: 6878000000
+              pid: 4065
+              print {
+                buf: "S|2609|launching: com.android.car.carlauncher|0\n"
+              }
+            }
+          }
+        }
+        """),
+       query=Metric('android_auto_multiuser'),
+       out=TextProto(r"""
+       android_auto_multiuser {
+         user_switch {
+            user_id: 11
+            start_event: "UserController.startUser-11-fg-start-mode-1"
+            end_event: "com.android.car.carlauncher"
+            duration_ms: 3877
+            previous_user_info {
+            }
+         }
+       }
+       """))
+
+  def test_android_auto_multiuser_switch_with_previous_user_data(self):
+    return DiffTestBlueprint(
+       trace=Path("android_auto_multiuser.textproto"),
+       query=Metric('android_auto_multiuser'),
+       out=TextProto(r"""
+       android_auto_multiuser {
+         user_switch {
+            user_id: 11
+            start_event: "UserController.startUser-11-fg-start-mode-1"
+            end_event: "com.android.car.carlauncher"
+            duration_ms: 999
+            previous_user_info {
+                user_id: 10
+                total_cpu_time_ms: 9
+                total_memory_usage_kb: 2048
+            }
+         }
+       }
+       """))
+
+  def test_android_oom_adjuster(self):
+    return DiffTestBlueprint(
+      trace=DataPath('android_postboot_unlock.pftrace'),
+      query=Metric("android_oom_adjuster"),
+      out=Path('android_oom_adjuster.out')
+    )

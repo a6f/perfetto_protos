@@ -39,6 +39,7 @@ export const recordConfigValidator = record({
 
   gpuFreq: bool(),
   gpuMemTotal: bool(),
+  gpuWorkPeriod: bool(),
 
   ftrace: bool(),
   atrace: bool(),
@@ -103,6 +104,11 @@ export const recordConfigValidator = record({
   uiRendering: bool(),
   inputEvents: bool(),
   navigationAndLoading: bool(),
+  audio: bool(),
+  video: bool(),
+
+  etwCSwitch: bool(),
+  etwThreadState: bool(),
 
   symbolizeKsyms: bool(),
 
@@ -110,11 +116,17 @@ export const recordConfigValidator = record({
   tracePerf: bool(),
   timebaseFrequency: num(100),
   targetCmdLine: arrayOf(str()),
+
+  linuxDeviceRpm: bool(),
 });
-export const namedRecordConfigValidator = record(
-    {title: requiredStr, key: requiredStr, config: recordConfigValidator});
-export type NamedRecordConfig =
-    ValidatedType<typeof namedRecordConfigValidator>;
+export const namedRecordConfigValidator = record({
+  title: requiredStr,
+  key: requiredStr,
+  config: recordConfigValidator,
+});
+export type NamedRecordConfig = ValidatedType<
+  typeof namedRecordConfigValidator
+>;
 export type RecordConfig = ValidatedType<typeof recordConfigValidator>;
 
 export function createEmptyRecordConfig(): RecordConfig {

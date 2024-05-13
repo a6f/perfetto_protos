@@ -15,7 +15,7 @@
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric
 from python.generators.diff_tests.testing import Csv, Json, TextProto
-from python.generators.diff_tests.testing import DiffTestBlueprint
+from python.generators.diff_tests.testing import DiffTestBlueprint, TraceInjector
 from python.generators.diff_tests.testing import TestSuite
 
 
@@ -632,6 +632,13 @@ class Parsing(TestSuite):
           timestamp: 101000002
         }
         packet {
+          chrome_trigger {
+            trigger_name_hash: 1595654158
+          }
+          trusted_packet_sequence_id: 1
+          timestamp: 101000002
+        }
+        packet {
           trusted_packet_sequence_id: 1
           timestamp: 101000002
           chrome_metadata {
@@ -643,6 +650,14 @@ class Parsing(TestSuite):
             }
             chrome_version_code: 101
             enabled_categories: "cat1,cat2,cat3"
+            field_trial_hashes {
+              name: 123
+              group: 456
+            }
+            field_trial_hashes {
+              name: 789
+              group: 120
+            }
           }
         }
         """),
@@ -650,6 +665,69 @@ class Parsing(TestSuite):
         SELECT * FROM metadata;
         """,
         out=Path('chrome_metadata.out'))
+
+  def test_chrome_metadata_multiple(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          clock_snapshot {
+            clocks {
+              clock_id: 6
+              timestamp: 101000002
+            }
+          }
+          trusted_packet_sequence_id: 1
+          timestamp: 101000002
+        }
+        packet {
+          trusted_packet_sequence_id: 1
+          timestamp: 101000002
+          chrome_metadata {
+            chrome_version_code: 101
+            enabled_categories: "cat1,cat2,cat3"
+            field_trial_hashes {
+              name: 123
+              group: 456
+            }
+            field_trial_hashes {
+              name: 789
+              group: 120
+            }
+          }
+        }
+        packet {
+          trusted_packet_sequence_id: 1
+          timestamp: 101000002
+          chrome_metadata {
+            chrome_version_code: 102
+            enabled_categories: "cat3,cat4,cat5"
+            field_trial_hashes {
+              name: 1234
+              group: 5678
+            }
+            field_trial_hashes {
+              name: 9012
+              group: 3456
+            }
+          }
+        }
+        """),
+        query="""
+        SELECT * FROM metadata;
+        """,
+        out=Csv("""
+        "id","type","name","key_type","int_value","str_value"
+        0,"metadata","trace_uuid","single","[NULL]","00000000-0000-0000-0de8-df55233147f0"
+        1,"metadata","trace_time_clock_id","single",6,"[NULL]"
+        2,"metadata","cr-a-playstore_version_code","single",101,"[NULL]"
+        3,"metadata","cr-a-enabled_categories","single","[NULL]","cat1,cat2,cat3"
+        4,"metadata","cr-a-field_trial_hashes","single","[NULL]","{ name: 123, group: 456 } { name: 789, group: 120 } "
+        5,"metadata","cr-b-playstore_version_code","single",102,"[NULL]"
+        6,"metadata","cr-b-enabled_categories","single","[NULL]","cat3,cat4,cat5"
+        7,"metadata","cr-b-field_trial_hashes","single","[NULL]","{ name: 1234, group: 5678 } { name: 9012, group: 3456 } "
+        8,"metadata","trace_size_bytes","single",110,"[NULL]"
+        9,"metadata","trace_type","single","[NULL]","proto"
+        """))
 
   # CPU info
   def test_cpu(self):
@@ -1247,3 +1325,94 @@ class Parsing(TestSuite):
         "all_data_source_flushed_ns",12344
         "all_data_source_flushed_ns",12345
         """))
+
+  def test_ftrace_abi_errors_skipped_zero_data_length(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_stats {
+            phase: END_OF_TRACE
+            cpu_stats {
+              cpu: 0
+              entries: 14
+              overrun: 0
+              commit_overrun: 0
+              bytes_read: 840
+              oldest_event_ts: 86557.552705
+              now_ts: 86557.574310
+              dropped_events: 0
+              read_events: 199966062
+            }
+            kernel_symbols_parsed: 128611
+            kernel_symbols_mem_kb: 1322
+            ftrace_parse_errors: FTRACE_STATUS_ABI_ZERO_DATA_LENGTH
+          }
+          trusted_uid: 9999
+          trusted_packet_sequence_id: 2
+          trusted_pid: 1069
+        }
+        """),
+        query="""
+        select name, severity, value
+        from stats
+        where name = "ftrace_abi_errors_skipped_zero_data_length"
+        """,
+        out=Csv("""
+        "name","severity","value"
+        "ftrace_abi_errors_skipped_zero_data_length","info",1
+        """))
+
+  # CPU info
+  def test_cpu_machine_id(self):
+    return DiffTestBlueprint(
+        trace=Path('cpu_info.textproto'),
+        trace_modifier=TraceInjector(['cpu_info'], {'machine_id': 1001}),
+        query="""
+        SELECT
+          id,
+          cluster_id,
+          processor
+        FROM cpu
+        WHERE machine_id is not NULL;
+        """,
+        out=Csv("""
+        "id","cluster_id","processor"
+        0,0,"AArch64 Processor rev 13 (aarch64)"
+        1,0,"AArch64 Processor rev 13 (aarch64)"
+        2,0,"AArch64 Processor rev 13 (aarch64)"
+        3,0,"AArch64 Processor rev 13 (aarch64)"
+        4,0,"AArch64 Processor rev 13 (aarch64)"
+        5,0,"AArch64 Processor rev 13 (aarch64)"
+        6,1,"AArch64 Processor rev 13 (aarch64)"
+        7,1,"AArch64 Processor rev 13 (aarch64)"
+        """))
+
+  def test_cpu_freq_machine_id(self):
+    return DiffTestBlueprint(
+        trace=Path('cpu_info.textproto'),
+        trace_modifier=TraceInjector(['cpu_info'], {'machine_id': 1001}),
+        query="""
+        SELECT
+          freq,
+          GROUP_CONCAT(cpu_id) AS cpus
+        FROM cpu_freq
+        WHERE machine_id is not NULL
+        GROUP BY freq
+        ORDER BY freq;
+        """,
+        out=Path('cpu_freq.out'))
+
+  def test_sched_waking_instants_compact_sched_machine_id(self):
+    return DiffTestBlueprint(
+        trace=DataPath('compact_sched.pb'),
+        trace_modifier=TraceInjector(
+            ['ftrace_events', 'ftrace_stats', 'system_info'],
+            {'machine_id': 1001}),
+        query="""
+        SELECT ts, thread.name, thread.tid
+        FROM thread_state
+        JOIN thread USING (utid)
+        WHERE state = 'R' AND thread_state.machine_id is not NULL
+        ORDER BY ts;
+        """,
+        out=Path('sched_waking_instants_compact_sched.out'))

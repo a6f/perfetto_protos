@@ -13,11 +13,10 @@
 // limitations under the License.
 
 import {ColumnDef} from '../../common/aggregation_data';
-import {pluginManager} from '../../common/plugins';
 import {Area, Sorting} from '../../common/state';
 import {globals} from '../../frontend/globals';
 import {Engine} from '../../trace_processor/engine';
-import {ACTUAL_FRAMES_SLICE_TRACK_KIND} from '../../tracks/frames';
+import {ACTUAL_FRAMES_SLICE_TRACK_KIND} from '../../core_plugins/frames';
 
 import {AggregationController} from './aggregation_controller';
 
@@ -30,7 +29,7 @@ export class FrameAggregationController extends AggregationController {
       const track = globals.state.tracks[trackKey];
       // Track will be undefined for track groups.
       if (track?.uri !== undefined) {
-        const trackInfo = pluginManager.resolveTrackInfo(track.uri);
+        const trackInfo = globals.trackManager.resolveTrackInfo(track.uri);
         if (trackInfo?.kind === ACTUAL_FRAMES_SLICE_TRACK_KIND) {
           trackInfo.trackIds && selectedSqlTrackIds.push(...trackInfo.trackIds);
         }

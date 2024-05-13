@@ -243,7 +243,7 @@ async function main() {
     scanDir('ui/src/test/diff_viewer');
     scanDir('buildtools/typefaces');
     scanDir('buildtools/catapult_trace_viewer');
-    generateImports('ui/src/tracks', 'all_tracks.ts');
+    generateImports('ui/src/core_plugins', 'all_core_plugins.ts');
     generateImports('ui/src/plugins', 'all_plugins.ts');
     compileProtos();
     genVersion();
@@ -471,7 +471,11 @@ function updateSymlinks() {
 function buildWasm(skipWasmBuild) {
   if (!skipWasmBuild) {
     if (!cfg.noOverrideGnArgs) {
-      const gnArgs = ['gen', `--args=is_debug=${cfg.debug}`, cfg.outDir];
+      let gnVars = `is_debug=${cfg.debug}`;
+      if (childProcess.spawnSync('which', ['ccache']).status === 0) {
+        gnVars += ` cc_wrapper="ccache"`;
+      }
+      const gnArgs = ['gen', `--args=${gnVars}`, cfg.outDir];
       addTask(exec, [pjoin(ROOT_DIR, 'tools/gn'), gnArgs]);
     }
 

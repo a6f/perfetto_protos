@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "src/trace_processor/importers/common/trace_parser.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_parser.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_tokenizer.h"
 
@@ -29,12 +30,12 @@
 #include "src/trace_processor/importers/common/metadata_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/slice_tracker.h"
+#include "src/trace_processor/importers/common/stack_profile_tracker.h"
 #include "src/trace_processor/importers/common/track_tracker.h"
-#include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
+#include "src/trace_processor/importers/ftrace/ftrace_sched_event_tracker.h"
 #include "src/trace_processor/importers/proto/additional_modules.h"
 #include "src/trace_processor/importers/proto/default_modules.h"
-#include "src/trace_processor/importers/proto/proto_trace_parser.h"
-#include "src/trace_processor/importers/proto/stack_profile_tracker.h"
+#include "src/trace_processor/importers/proto/proto_trace_parser_impl.h"
 #include "src/trace_processor/sorter/trace_sorter.h"
 #include "src/trace_processor/storage/metadata.h"
 #include "src/trace_processor/storage/trace_storage.h"
@@ -91,10 +92,10 @@ using ::testing::Pointwise;
 using ::testing::Return;
 using ::testing::ReturnRef;
 using ::testing::UnorderedElementsAreArray;
-class MockSchedEventTracker : public SchedEventTracker {
+class MockSchedEventTracker : public FtraceSchedEventTracker {
  public:
   explicit MockSchedEventTracker(TraceProcessorContext* context)
-      : SchedEventTracker(context) {}
+      : FtraceSchedEventTracker(context) {}
 
   MOCK_METHOD(void,
               PushSchedSwitch,
@@ -236,8 +237,7 @@ class FuchsiaTraceParserTest : public ::testing::Test {
     context_.track_tracker.reset(new TrackTracker(&context_));
     context_.global_args_tracker.reset(
         new GlobalArgsTracker(context_.storage.get()));
-    context_.global_stack_profile_tracker.reset(
-        new GlobalStackProfileTracker());
+    context_.stack_profile_tracker.reset(new StackProfileTracker(&context_));
     context_.args_tracker.reset(new ArgsTracker(&context_));
     context_.args_translation_table.reset(new ArgsTranslationTable(storage_));
     context_.metadata_tracker.reset(
@@ -245,7 +245,7 @@ class FuchsiaTraceParserTest : public ::testing::Test {
     event_ = new MockEventTracker(&context_);
     context_.event_tracker.reset(event_);
     sched_ = new MockSchedEventTracker(&context_);
-    context_.sched_tracker.reset(sched_);
+    context_.ftrace_sched_tracker.reset(sched_);
     process_ = new NiceMock<MockProcessTracker>(&context_);
     context_.process_tracker.reset(process_);
     slice_ = new NiceMock<MockSliceTracker>(&context_);
@@ -254,8 +254,10 @@ class FuchsiaTraceParserTest : public ::testing::Test {
     context_.clock_tracker.reset(new ClockTracker(&context_));
     clock_ = context_.clock_tracker.get();
     context_.flow_tracker.reset(new FlowTracker(&context_));
-    context_.sorter.reset(new TraceSorter(&context_, CreateParser(),
-                                          TraceSorter::SortingMode::kFullSort));
+    context_.fuchsia_record_parser.reset(new FuchsiaTraceParser(&context_));
+    context_.proto_trace_parser.reset(new ProtoTraceParserImpl(&context_));
+    context_.sorter.reset(
+        new TraceSorter(&context_, TraceSorter::SortingMode::kFullSort));
     context_.descriptor_pool_.reset(new DescriptorPool());
 
     RegisterDefaultModules(&context_);
@@ -286,9 +288,6 @@ class FuchsiaTraceParserTest : public ::testing::Test {
 
  protected:
   std::vector<uint64_t> trace_bytes_;
-  std::unique_ptr<TraceParser> CreateParser() {
-    return std::unique_ptr<TraceParser>(new FuchsiaTraceParser(&context_));
-  }
 
   TraceProcessorContext context_;
   MockEventTracker* event_;
