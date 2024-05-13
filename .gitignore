@@ -31,7 +31,7 @@ perf.data*
 TAGS
 /*.pftrace
 examples/sdk/build/
+Cargo.lock
 GPATH
 GRTAGS
 GTAGS
-Cargo.lock
