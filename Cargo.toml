@@ -3,9 +3,9 @@ name = "perfetto_protos"
 version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
-scription = "Generates Rust bindings to Protocol Buffers defined by Perfetto"
-readme = "README-crate.md"
+description = "Generates Rust bindings to Protocol Buffers defined by Perfetto"
 repository = "https://github.com/a6f/perfetto_protos"
+readme = "README-crate.md"
 include = [
     "**/*.rs",
     "protos/**/*.proto",
