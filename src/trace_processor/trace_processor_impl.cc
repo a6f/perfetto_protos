@@ -49,7 +49,7 @@
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_parser.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_tokenizer.h"
 #include "src/trace_processor/importers/gzip/gzip_trace_parser.h"
-#include "src/trace_processor/importers/json/json_trace_parser.h"
+#include "src/trace_processor/importers/json/json_trace_parser_impl.h"
 #include "src/trace_processor/importers/json/json_trace_tokenizer.h"
 #include "src/trace_processor/importers/json/json_utils.h"
 #include "src/trace_processor/importers/ninja/ninja_log_parser.h"
@@ -81,6 +81,8 @@
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/to_ftrace.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/utils.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/window_functions.h"
+#include "src/trace_processor/perfetto_sql/intrinsics/operators/counter_mipmap_operator.h"
+#include "src/trace_processor/perfetto_sql/intrinsics/operators/slice_mipmap_operator.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/operators/span_join_operator.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/operators/window_operator.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/table_functions/ancestor.h"
@@ -339,14 +341,14 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
     : TraceProcessorStorageImpl(cfg), config_(cfg) {
   context_.fuchsia_trace_tokenizer =
       std::make_unique<FuchsiaTraceTokenizer>(&context_);
-  context_.fuchsia_trace_parser =
+  context_.fuchsia_record_parser =
       std::make_unique<FuchsiaTraceParser>(&context_);
   context_.ninja_log_parser = std::make_unique<NinjaLogParser>(&context_);
   context_.systrace_trace_parser =
       std::make_unique<SystraceTraceParser>(&context_);
   context_.perf_data_trace_tokenizer =
       std::make_unique<perf_importer::PerfDataTokenizer>(&context_);
-  context_.perf_data_parser =
+  context_.perf_record_parser =
       std::make_unique<perf_importer::PerfDataParser>(&context_);
 
   if (util::IsGzipSupported()) {
@@ -358,7 +360,8 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   if (json::IsJsonSupported()) {
     context_.json_trace_tokenizer =
         std::make_unique<JsonTraceTokenizer>(&context_);
-    context_.json_trace_parser = std::make_unique<JsonTraceParser>(&context_);
+    context_.json_trace_parser =
+        std::make_unique<JsonTraceParserImpl>(&context_);
   }
 
   if (context_.config.analyze_trace_proto_content) {
@@ -747,6 +750,12 @@ void TraceProcessorImpl::InitPerfettoSqlEngine() {
       std::make_unique<SpanJoinOperatorModule::Context>(engine_.get()));
   engine_->sqlite_engine()->RegisterVirtualTableModule<WindowOperatorModule>(
       "window", std::make_unique<WindowOperatorModule::Context>());
+  engine_->sqlite_engine()->RegisterVirtualTableModule<CounterMipmapOperator>(
+      "__intrinsic_counter_mipmap",
+      std::make_unique<CounterMipmapOperator::Context>(engine_.get()));
+  engine_->sqlite_engine()->RegisterVirtualTableModule<SliceMipmapOperator>(
+      "__intrinsic_slice_mipmap",
+      std::make_unique<SliceMipmapOperator::Context>(engine_.get()));
 
   // Initalize the tables and views in the prelude.
   InitializePreludeTablesViews(db);

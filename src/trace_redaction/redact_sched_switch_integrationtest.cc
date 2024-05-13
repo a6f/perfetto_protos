@@ -48,7 +48,8 @@ class RedactSchedSwitchIntegrationTest
 
     auto* ftrace_event_redactions =
         trace_redactor()->emplace_transform<RedactFtraceEvent>();
-    ftrace_event_redactions->emplace_back<RedactSchedSwitch>();
+    ftrace_event_redactions
+        ->emplace_back<RedactSchedSwitch::kFieldId, RedactSchedSwitch>();
 
     context()->package_name = "com.Unity.com.unity.multiplayer.samples.coop";
   }
@@ -175,18 +176,19 @@ TEST_F(RedactSchedSwitchIntegrationTest, ClearsNonTargetSwitchComms) {
       const auto* next_comm = expected_names.Find(next_pid);
       const auto* prev_comm = expected_names.Find(prev_pid);
 
+      EXPECT_TRUE(sched_decoder.has_next_comm());
+      EXPECT_TRUE(sched_decoder.has_prev_comm());
+
       if (next_comm) {
-        EXPECT_TRUE(sched_decoder.has_next_comm());
         EXPECT_EQ(sched_decoder.next_comm().ToStdString(), *next_comm);
       } else {
-        EXPECT_FALSE(sched_decoder.has_next_comm());
+        EXPECT_EQ(sched_decoder.next_comm().size, 0u);
       }
 
       if (prev_comm) {
-        EXPECT_TRUE(sched_decoder.has_prev_comm());
         EXPECT_EQ(sched_decoder.prev_comm().ToStdString(), *prev_comm);
       } else {
-        EXPECT_FALSE(sched_decoder.has_prev_comm());
+        EXPECT_EQ(sched_decoder.prev_comm().size, 0u);
       }
     }
   }

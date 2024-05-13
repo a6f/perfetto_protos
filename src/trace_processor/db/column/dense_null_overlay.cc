@@ -82,10 +82,10 @@ RangeOrBitVector DenseNullOverlay::ChainImpl::SearchValidated(FilterOp op,
       case SearchValidationResult::kNoData: {
         // There is no need to search in underlying storage. It's enough to
         // intersect the |non_null_|.
-        BitVector res = non_null_->IntersectRange(in.start, in.end);
-        res.Not();
+        BitVector res = non_null_->Copy();
         res.Resize(in.end, false);
-        return RangeOrBitVector(std::move(res));
+        res.Not();
+        return RangeOrBitVector(res.IntersectRange(in.start, in.end));
       }
       case SearchValidationResult::kAllData:
         return RangeOrBitVector(in);
@@ -247,6 +247,35 @@ void DenseNullOverlay::ChainImpl::StableSort(SortToken* start,
   inner_->StableSort(it, end, direction);
   if (direction == SortDirection::kDescending) {
     std::rotate(start, it, end);
+  }
+}
+
+void DenseNullOverlay::ChainImpl::Distinct(Indices& indices) const {
+  PERFETTO_TP_TRACE(metatrace::Category::DB,
+                    "DenseNullOverlay::ChainImpl::Distinct");
+  // Find first NULL.
+  auto first_null_it = std::find_if(
+      indices.tokens.begin(), indices.tokens.end(),
+      [this](const Indices::Token& t) { return !non_null_->IsSet(t.index); });
+
+  // Save first NULL.
+  std::optional<Indices::Token> null_tok;
+  if (first_null_it != indices.tokens.end()) {
+    null_tok = *first_null_it;
+  }
+
+  // Erase all NULLs.
+  indices.tokens.erase(std::remove_if(first_null_it, indices.tokens.end(),
+                                      [this](const Indices::Token& idx) {
+                                        return !non_null_->IsSet(idx.index);
+                                      }),
+                       indices.tokens.end());
+
+  inner_->Distinct(indices);
+
+  // Add the only null as it is distinct value.
+  if (null_tok.has_value()) {
+    indices.tokens.push_back(*null_tok);
   }
 }
 

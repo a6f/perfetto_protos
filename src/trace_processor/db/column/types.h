@@ -17,6 +17,7 @@
 #define SRC_TRACE_PROCESSOR_DB_COLUMN_TYPES_H_
 
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -94,6 +95,33 @@ struct Constraint {
 struct Order {
   uint32_t col_idx;
   bool desc;
+};
+
+// Structured data used to determine what Trace Processor will query using
+// CEngine.
+struct Query {
+  enum class OrderType {
+    // Order should only be used for sorting.
+    kSort = 0,
+    // Distinct, `orders` signify which columns are supposed to be distinct and
+    // used for sorting.
+    kDistinctAndSort = 1,
+    // Distinct and `orders` signify only columns are supposed to be distinct,
+    // don't need additional sorting.
+    kDistinct = 2
+  };
+  OrderType distinct = OrderType::kSort;
+  // Query constraints.
+  std::vector<Constraint> constraints;
+  // Query order bys. Check distinct to know whether they should be used for
+  // sorting.
+  std::vector<Order> orders;
+
+  // LIMIT value.
+  std::optional<uint32_t> limit;
+
+  // OFFSET value. Can be "!= 0" only if `limit` has value.
+  uint32_t offset = 0;
 };
 
 // The enum type of the column.

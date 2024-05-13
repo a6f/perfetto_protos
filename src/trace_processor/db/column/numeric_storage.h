@@ -19,13 +19,16 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
 #include "perfetto/base/compiler.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/containers/bit_vector.h"
+#include "src/trace_processor/containers/row_map.h"
 #include "src/trace_processor/db/column/data_layer.h"
 #include "src/trace_processor/db/column/types.h"
 #include "src/trace_processor/db/column/utils.h"
@@ -100,21 +103,17 @@ class NumericStorage final : public NumericStorageBase {
     SingleSearchResult SingleSearch(FilterOp op,
                                     SqlValue sql_val,
                                     uint32_t i) const override {
-      if constexpr (std::is_same_v<T, double>) {
-        if (sql_val.type != SqlValue::kDouble) {
-          return SingleSearchResult::kNeedsFullSearch;
-        }
-        return utils::SingleSearchNumeric(op, (*vector_)[i],
-                                          sql_val.double_value);
-      } else {
-        if (sql_val.type != SqlValue::kLong ||
-            sql_val.long_value > std::numeric_limits<T>::max() ||
-            sql_val.long_value < std::numeric_limits<T>::min()) {
-          return SingleSearchResult::kNeedsFullSearch;
-        }
-        return utils::SingleSearchNumeric(op, (*vector_)[i],
-                                          static_cast<T>(sql_val.long_value));
-      }
+      return utils::SingleSearchNumeric(op, (*vector_)[i], sql_val);
+    }
+
+    void Distinct(Indices& indices) const override {
+      std::unordered_set<T> s;
+      indices.tokens.erase(
+          std::remove_if(indices.tokens.begin(), indices.tokens.end(),
+                         [&s, this](const Indices::Token& idx) {
+                           return !s.insert((*vector_)[idx.index]).second;
+                         }),
+          indices.tokens.end());
     }
 
     void StableSort(SortToken* start,
