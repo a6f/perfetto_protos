@@ -18,6 +18,7 @@ fn main() {
     assert!(result.status.success());
     let output = core::str::from_utf8(&result.stdout).unwrap();
     let output = output.replace("\\\n", " ");
+    let output = output.replace("/dev/null: ", "");
     let files: Vec<&str> = output.split_ascii_whitespace().collect();
 
     // Generate Rust code from protos.
