@@ -32,7 +32,7 @@
 #include "perfetto/tracing/core/trace_config.h"
 #include "src/base/test/test_task_runner.h"
 #include "src/ipc/test/test_socket.h"
-#include "src/tracing/core/tracing_service_impl.h"
+#include "src/tracing/service/tracing_service_impl.h"
 #include "test/gtest_and_gmock.h"
 
 #include "protos/perfetto/config/trace_config.gen.h"
@@ -198,35 +198,6 @@ class TracingIntegrationTest : public ::testing::Test {
 
   virtual TracingService::ProducerSMBScrapingMode GetProducerSMBScrapingMode() {
     return TracingService::ProducerSMBScrapingMode::kDefault;
-  }
-
-  void WaitForTraceWritersChanged(ProducerID producer_id) {
-    static int i = 0;
-    auto checkpoint_name = "writers_changed_" + std::to_string(producer_id) +
-                           "_" + std::to_string(i++);
-    auto writers_changed = task_runner_->CreateCheckpoint(checkpoint_name);
-    auto writers = GetWriters(producer_id);
-    std::function<void()> task;
-    task = [&task, writers, writers_changed, producer_id, this]() {
-      if (writers != GetWriters(producer_id)) {
-        writers_changed();
-        return;
-      }
-      task_runner_->PostDelayedTask(task, 1);
-    };
-    task_runner_->PostDelayedTask(task, 1);
-    task_runner_->RunUntilCheckpoint(checkpoint_name);
-  }
-
-  const std::map<WriterID, BufferID>& GetWriters(ProducerID producer_id) {
-    return reinterpret_cast<TracingServiceImpl*>(svc_->service())
-        ->GetProducer(producer_id)
-        ->writers_;
-  }
-
-  ProducerID* last_producer_id() {
-    return &reinterpret_cast<TracingServiceImpl*>(svc_->service())
-                ->last_producer_id_;
   }
 
   std::unique_ptr<base::TestTaskRunner> task_runner_;
@@ -515,7 +486,7 @@ TEST_F(TracingIntegrationTestWithSMBScrapingProducer, ScrapeOnFlush) {
   ASSERT_TRUE(writer);
 
   // Wait for the writer to be registered.
-  WaitForTraceWritersChanged(*last_producer_id());
+  task_runner_->RunUntilIdle();
 
   // Write a few trace packets.
   writer->NewTracePacket()->set_for_testing()->set_str("payload1");
@@ -541,9 +512,7 @@ TEST_F(TracingIntegrationTestWithSMBScrapingProducer, ScrapeOnFlush) {
       }));
   task_runner_->RunUntilCheckpoint("on_flush_complete");
 
-  // Read the log buffer. We should only see the first two written trace
-  // packets, because the service can't be sure the last one was written
-  // completely by the trace writer.
+  // Read the log buffer. We should see all the packets.
   consumer_endpoint_->ReadBuffers();
 
   size_t num_test_pack_rx = 0;
@@ -564,7 +533,7 @@ TEST_F(TracingIntegrationTestWithSMBScrapingProducer, ScrapeOnFlush) {
               all_packets_rx();
           }));
   task_runner_->RunUntilCheckpoint("all_packets_rx");
-  ASSERT_EQ(2u, num_test_pack_rx);
+  ASSERT_EQ(3u, num_test_pack_rx);
 
   // Disable tracing.
   consumer_endpoint_->DisableTracing();

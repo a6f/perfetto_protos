@@ -15,7 +15,7 @@
 
 from python.generators.diff_tests.testing import Path, DataPath, Metric
 from python.generators.diff_tests.testing import Csv, Json, TextProto
-from python.generators.diff_tests.testing import DiffTestBlueprint
+from python.generators.diff_tests.testing import DiffTestBlueprint, TraceInjector
 from python.generators.diff_tests.testing import TestSuite
 
 
@@ -35,6 +35,8 @@ class Tables(TestSuite):
         "ts","dur","quantum_ts"
         0,9223372036854775807,0
         """))
+
+
 
   # Null printing
   def test_nulls(self):
@@ -212,6 +214,41 @@ class Tables(TestSuite):
         "
         """))
 
+  # Ftrace stats imports in metadata and stats tables
+  def test_filter_stats(self):
+    return DiffTestBlueprint(
+        trace=TextProto("""
+          packet { trace_stats{ filter_stats {
+            input_packets: 836
+            input_bytes: 25689644
+            output_bytes: 24826981
+            errors: 12
+            time_taken_ns: 1228178548
+            bytes_discarded_per_buffer: 1
+            bytes_discarded_per_buffer: 34
+            bytes_discarded_per_buffer: 29
+            bytes_discarded_per_buffer: 0
+            bytes_discarded_per_buffer: 862588
+          }}}"""),
+        query="""
+        SELECT name, value FROM stats
+        WHERE name like 'filter_%' OR name = 'traced_buf_bytes_filtered_out'
+        ORDER by name ASC
+        """,
+        out=Csv("""
+        "name","value"
+        "filter_errors",12
+        "filter_input_bytes",25689644
+        "filter_input_packets",836
+        "filter_output_bytes",24826981
+        "filter_time_taken_ns",1228178548
+        "traced_buf_bytes_filtered_out",1
+        "traced_buf_bytes_filtered_out",34
+        "traced_buf_bytes_filtered_out",29
+        "traced_buf_bytes_filtered_out",0
+        "traced_buf_bytes_filtered_out",862588
+        """))
+
   # cpu_track table
   def test_cpu_track_table(self):
     return DiffTestBlueprint(
@@ -260,16 +297,16 @@ class Tables(TestSuite):
         """,
         out=Csv("""
         "type","cpu"
-        "cpu_track",0
-        "cpu_track",1
+        "__intrinsic_cpu_track",0
+        "__intrinsic_cpu_track",1
         """))
 
   def test_thread_state_flattened_aggregated(self):
     return DiffTestBlueprint(
         trace=DataPath('android_monitor_contention_trace.atr'),
         query="""
-      INCLUDE PERFETTO MODULE experimental.thread_state_flattened;
-      select * from experimental_get_flattened_thread_state_aggregated(11155, NULL);
+      INCLUDE PERFETTO MODULE sched.thread_state_flattened;
+      select * from _get_flattened_thread_state_aggregated(11155, NULL);
       """,
         out=Path('thread_state_flattened_aggregated_csv.out'))
 
@@ -277,8 +314,8 @@ class Tables(TestSuite):
     return DiffTestBlueprint(
         trace=DataPath('android_monitor_contention_trace.atr'),
         query="""
-      INCLUDE PERFETTO MODULE experimental.thread_state_flattened;
-      select * from experimental_get_flattened_thread_state(11155, NULL);
+      INCLUDE PERFETTO MODULE sched.thread_state_flattened;
+      select * from _get_flattened_thread_state(11155, NULL);
       """,
         out=Path('thread_state_flattened_csv.out'))
 
@@ -378,4 +415,61 @@ class Tables(TestSuite):
         out=Csv("""
           "TO_REALTIME(0)"
           420
+        """))
+
+  # Test cpu_track with machine_id ID.
+  def test_cpu_track_table_machine_id(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          ftrace_events {
+            cpu: 1
+            event {
+              timestamp: 100001000000
+              pid: 10
+              irq_handler_entry {
+                irq: 100
+                name : "resource1"
+              }
+            }
+            event {
+              timestamp: 100002000000
+              pid: 10
+              irq_handler_exit {
+                irq: 100
+                ret: 1
+              }
+            }
+          }
+          machine_id: 1001
+        }
+        packet {
+          ftrace_events {
+            cpu: 0
+            event {
+              timestamp: 100003000000
+              pid: 15
+              irq_handler_entry {
+                irq: 100
+                name : "resource1"
+              }
+            }
+          }
+          machine_id: 1001
+        }
+        """),
+        query="""
+        SELECT
+          ct.type,
+          ct.ucpu,
+          c.cpu,
+          ct.machine_id
+        FROM cpu_track AS ct
+        JOIN cpu AS c ON ct.ucpu = c.id
+        ORDER BY ct.type, c.cpu
+        """,
+        out=Csv("""
+        "type","ucpu","cpu","machine_id"
+        "__intrinsic_cpu_track",4096,0,1
+        "__intrinsic_cpu_track",4097,1,1
         """))

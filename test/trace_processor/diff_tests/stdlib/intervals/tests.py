@@ -52,3 +52,69 @@ class StdlibIntervals(TestSuite):
         80,2
         90,1
         """))
+
+  def test_intervals_overlap_in_table(self):
+    return DiffTestBlueprint(
+        trace=TextProto(""),
+        query="""
+        INCLUDE PERFETTO MODULE intervals.overlap;
+
+        WITH data_no_overlaps(ts, dur) AS (
+          VALUES
+            (10, 10),
+            (30, 10)
+        ),
+        data_with_overlaps(ts, dur) AS (
+          VALUES
+            (10, 10),
+            (15, 10)
+        )
+        SELECT * FROM (
+        SELECT *
+        FROM _intervals_overlap_in_table!(data_no_overlaps)
+        UNION
+        SELECT *
+        FROM _intervals_overlap_in_table!(data_with_overlaps)
+        )
+        """,
+        out=Csv("""
+        "has_overlaps"
+        0
+        1
+        """))
+
+  def test_intervals_flatten(self):
+    return DiffTestBlueprint(
+        trace=TextProto(""),
+        query="""
+        INCLUDE PERFETTO MODULE intervals.overlap;
+
+        WITH roots_data (id, ts, dur) AS (
+          VALUES
+            (0, 0, 9),
+            (1, 9, 1)
+        ), children_data (root_id, id, parent_id, ts, dur) AS (
+          VALUES
+            (0, 2, 0, 1, 3),
+            (0, 3, 0, 5, 1),
+            (0, 4, 0, 6, 1),
+            (0, 5, 0, 7, 0),
+            (0, 6, 0, 7, 1),
+            (0, 7, 2, 2, 1)
+        )
+        SELECT ts, dur, id, root_id
+        FROM _intervals_flatten!(_intervals_merge_root_and_children!(roots_data, children_data)) ORDER BY ts
+        """,
+        out=Csv("""
+        "ts","dur","id","root_id"
+        0,1,0,0
+        1,1,2,0
+        2,1,7,0
+        3,1,2,0
+        4,1,0,0
+        5,1,3,0
+        6,1,4,0
+        7,1,6,0
+        8,1,0,0
+        9,1,1,1
+        """))

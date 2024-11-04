@@ -30,6 +30,9 @@
 #include "protos/perfetto/trace/trace_packet_defaults.pbzero.h"
 #include "protos/perfetto/trace/track_event/debug_annotation.pbzero.h"
 #include "protos/perfetto/trace/track_event/track_descriptor.pbzero.h"
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_MAC)
+#include <os/signpost.h>
+#endif
 
 using perfetto::protos::pbzero::ClockSnapshot;
 
@@ -150,7 +153,6 @@ bool TrackEventInternal::Initialize(
     bool (*register_data_source)(const DataSourceDescriptor&)) {
   DataSourceDescriptor dsd;
   dsd.set_name("track_event");
-  dsd.set_no_flush(true);
 
   protozero::HeapBuffered<protos::pbzero::TrackEventDescriptor> ted;
   for (size_t i = 0; i < registry.category_count(); i++) {
@@ -421,6 +423,18 @@ void TrackEventInternal::ResetIncrementalState(
           thread_time_counter_track.uuid);
     }
 
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_MAC)
+    // Emit a MacOS point-of-interest signpost to synchonize Mac profiler time
+    // with boot time.
+    // TODO(leszeks): Consider allowing synchronization against other clocks
+    // than boot time.
+    static os_log_t log_handle = os_log_create(
+        "dev.perfetto.clock_sync", OS_LOG_CATEGORY_POINTS_OF_INTEREST);
+    os_signpost_event_emit(
+        log_handle, OS_SIGNPOST_ID_EXCLUSIVE, "boottime", "%" PRId64,
+        static_cast<uint64_t>(perfetto::base::GetBootTimeNs().count()));
+#endif
+
     if (tls_state.default_clock != static_cast<uint32_t>(GetClockId())) {
       ClockSnapshot* clocks = packet->set_clock_snapshot();
       // Trace clock.
@@ -536,7 +550,7 @@ EventContext TrackEventInternal::WriteEvent(
     bool on_current_thread_track) {
   PERFETTO_DCHECK(!incr_state->was_cleared);
   auto packet = NewTracePacket(trace_writer, incr_state, tls_state, timestamp);
-  EventContext ctx(std::move(packet), incr_state, &tls_state);
+  EventContext ctx(trace_writer, std::move(packet), incr_state, &tls_state);
 
   auto track_event = ctx.event();
   if (type != protos::pbzero::TrackEvent::TYPE_UNSPECIFIED)

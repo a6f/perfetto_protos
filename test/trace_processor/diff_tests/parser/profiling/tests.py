@@ -146,11 +146,15 @@ class Profiling(TestSuite):
           SUM(obj.self_size + obj.native_size) AS total_objects_size,
           (
             SELECT SUM(cumulative_size)
-            FROM experimental_flamegraph
-            WHERE experimental_flamegraph.upid = obj.upid
-              AND experimental_flamegraph.ts = obj.graph_sample_ts
-              AND profile_type = 'graph'
-              AND depth = 0 -- only the roots
+            FROM experimental_flamegraph(
+              'graph',
+              obj.graph_sample_ts,
+              NULL,
+              obj.upid,
+              NULL,
+              NULL
+            )
+            WHERE depth = 0 -- only the roots
           ) AS total_flamegraph_size
         FROM
           heap_graph_object AS obj
@@ -179,10 +183,14 @@ class Profiling(TestSuite):
           size,
           cumulative_size,
           parent_id
-        FROM experimental_flamegraph
-        WHERE upid = (SELECT max(upid) FROM heap_graph_object)
-          AND profile_type = 'graph'
-          AND ts = (SELECT max(graph_sample_ts) FROM heap_graph_object)
+        FROM experimental_flamegraph(
+          'graph',
+          (SELECT max(graph_sample_ts) FROM heap_graph_object),
+          NULL,
+          (SELECT max(upid) FROM heap_graph_object),
+          NULL,
+          NULL
+        )
         LIMIT 10;
         """,
         out=Path('heap_graph_flamegraph.out'))
@@ -302,6 +310,7 @@ class Profiling(TestSuite):
           from stack_profile_callsite spc
           join stack_profile_frame spf on (spc.frame_id = spf.id)
           where spf.name = "_ZN3art28ResolveFieldWithAccessChecksEPNS_6ThreadEPNS_11ClassLinkerEtPNS_9ArtMethodEbbm")
+          and depth != 10  -- Skipped because cause symbolization issues on clang vs gcc due to llvm-demangle
         order by depth asc;
         """,
         out=Csv("""
@@ -316,7 +325,6 @@ class Profiling(TestSuite):
         7,"aot","/system/framework/arm64/boot-framework.oat","com.android.internal.os.ZygoteInit.main"
         8,"aot","/system/framework/arm64/boot-framework.oat","com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run"
         9,"common-frame","/system/framework/arm64/boot.oat","art_jni_trampoline"
-        10,"[NULL]","/apex/com.android.art/lib64/libart.so","art::Method_invoke(_JNIEnv*, _jobject*, _jobject*, _jobjectArray*) (.__uniq.165753521025965369065708152063621506277)"
         11,"common-frame","/apex/com.android.art/lib64/libart.so","_jobject* art::InvokeMethod<(art::PointerSize)8>(art::ScopedObjectAccessAlreadyRunnable const&, _jobject*, _jobject*, _jobject*, unsigned long)"
         12,"common-frame","/apex/com.android.art/lib64/libart.so","art_quick_invoke_static_stub"
         13,"aot","/system/framework/arm64/boot-framework.oat","android.app.ActivityThread.main"

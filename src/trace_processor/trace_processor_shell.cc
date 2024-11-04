@@ -41,9 +41,9 @@
 #include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/ext/base/getopt.h"
 #include "perfetto/ext/base/scoped_file.h"
+#include "perfetto/ext/base/status_or.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/base/string_utils.h"
-#include "perfetto/ext/base/string_view.h"
 #include "perfetto/ext/base/version.h"
 
 #include "perfetto/trace_processor/metatrace_config.h"
@@ -52,8 +52,9 @@
 #include "src/trace_processor/metrics/all_chrome_metrics.descriptor.h"
 #include "src/trace_processor/metrics/all_webview_metrics.descriptor.h"
 #include "src/trace_processor/metrics/metrics.descriptor.h"
-#include "src/trace_processor/metrics/metrics.h"
 #include "src/trace_processor/read_trace_internal.h"
+#include "src/trace_processor/rpc/stdiod.h"
+#include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/util/sql_modules.h"
 #include "src/trace_processor/util/status_macros.h"
 
@@ -274,9 +275,7 @@ base::Status ExportTraceToDatabase(const std::string& output_name) {
     return base::ErrStatus("%s", status.c_message());
 
   // Export real and virtual tables.
-  auto tables_it = g_tp->ExecuteQuery(
-      "SELECT name FROM perfetto_tables UNION "
-      "SELECT name FROM sqlite_master WHERE type='table'");
+  auto tables_it = g_tp->ExecuteQuery("SELECT name FROM perfetto_tables");
   while (tables_it.Next()) {
     std::string table_name = tables_it.Get(0).string_value;
     PERFETTO_CHECK(!base::Contains(table_name, '\''));
@@ -499,41 +498,68 @@ void PrintQueryResultInteractively(Iterator* it,
          static_cast<double>((t_end - t_start).count()) / 1E6);
 }
 
-base::Status PrintQueryResultAsCsv(Iterator* it, bool has_more, FILE* output) {
+struct QueryResult {
+  std::vector<std::string> column_names;
+  std::vector<std::vector<std::string>> rows;
+};
+
+base::StatusOr<QueryResult> ExtractQueryResult(Iterator* it, bool has_more) {
+  QueryResult result;
+
   for (uint32_t c = 0; c < it->ColumnCount(); c++) {
+    fprintf(stderr, "column %d = %s\n", c, it->GetColumnName(c).c_str());
+    result.column_names.push_back(it->GetColumnName(c));
+  }
+
+  for (; has_more; has_more = it->Next()) {
+    std::vector<std::string> row;
+    for (uint32_t c = 0; c < it->ColumnCount(); c++) {
+      SqlValue value = it->Get(c);
+      std::string str_value;
+      switch (value.type) {
+        case SqlValue::Type::kNull:
+          str_value = "\"[NULL]\"";
+          break;
+        case SqlValue::Type::kDouble:
+          str_value =
+              base::StackString<256>("%f", value.double_value).ToStdString();
+          break;
+        case SqlValue::Type::kLong:
+          str_value = base::StackString<256>("%" PRIi64, value.long_value)
+                          .ToStdString();
+          break;
+        case SqlValue::Type::kString:
+          str_value = '"' + std::string(value.string_value) + '"';
+          break;
+        case SqlValue::Type::kBytes:
+          str_value = "\"<raw bytes>\"";
+          break;
+      }
+
+      row.push_back(std::move(str_value));
+    }
+    result.rows.push_back(std::move(row));
+  }
+  RETURN_IF_ERROR(it->Status());
+  return result;
+}
+
+void PrintQueryResultAsCsv(const QueryResult& result, FILE* output) {
+  for (uint32_t c = 0; c < result.column_names.size(); c++) {
     if (c > 0)
       fprintf(output, ",");
-    fprintf(output, "\"%s\"", it->GetColumnName(c).c_str());
+    fprintf(output, "\"%s\"", result.column_names[c].c_str());
   }
   fprintf(output, "\n");
 
-  for (; has_more; has_more = it->Next()) {
-    for (uint32_t c = 0; c < it->ColumnCount(); c++) {
+  for (const auto& row : result.rows) {
+    for (uint32_t c = 0; c < result.column_names.size(); c++) {
       if (c > 0)
         fprintf(output, ",");
-
-      auto value = it->Get(c);
-      switch (value.type) {
-        case SqlValue::Type::kNull:
-          fprintf(output, "\"%s\"", "[NULL]");
-          break;
-        case SqlValue::Type::kDouble:
-          fprintf(output, "%f", value.double_value);
-          break;
-        case SqlValue::Type::kLong:
-          fprintf(output, "%" PRIi64, value.long_value);
-          break;
-        case SqlValue::Type::kString:
-          fprintf(output, "\"%s\"", value.string_value);
-          break;
-        case SqlValue::Type::kBytes:
-          fprintf(output, "\"%s\"", "<raw bytes>");
-          break;
-      }
+      fprintf(output, "%s", row[c].c_str());
     }
     fprintf(output, "\n");
   }
-  return it->Status();
 }
 
 base::Status RunQueriesWithoutOutput(const std::string& sql_query) {
@@ -578,8 +604,16 @@ base::Status RunQueriesAndPrintResult(const std::string& sql_query,
     return base::OkStatus();
   }
 
+  auto query_result = ExtractQueryResult(&it, has_more);
+  RETURN_IF_ERROR(query_result.status());
+
+  // We want to include the query iteration time (as it's a part of executing
+  // SQL and can be non-trivial), and we want to exclude the time spent printing
+  // the result (which can be significant for large results), so we materialise
+  // the results first, then take the measurement, then print them.
   auto query_end = std::chrono::steady_clock::now();
-  RETURN_IF_ERROR(PrintQueryResultAsCsv(&it, has_more, output));
+
+  PrintQueryResultAsCsv(query_result.value(), output);
 
   auto dur = query_end - query_start;
   PERFETTO_ILOG(
@@ -667,6 +701,7 @@ metatrace::MetatraceCategories ParseMetatraceCategories(std::string s) {
 struct CommandLineOptions {
   std::string perf_file_path;
   std::string query_file_path;
+  std::string query_string;
   std::string pre_metrics_path;
   std::string sqlite_file_path;
   std::string sql_module_path;
@@ -679,6 +714,7 @@ struct CommandLineOptions {
   std::vector<std::string> raw_metric_extensions;
   bool launch_shell = false;
   bool enable_httpd = false;
+  bool enable_stdiod = false;
   bool wide = false;
   bool force_full_sort = false;
   std::string metatrace_path;
@@ -688,6 +724,7 @@ struct CommandLineOptions {
           metatrace::MetatraceCategories::QUERY_TIMELINE |
           metatrace::MetatraceCategories::API_TIMELINE);
   bool dev = false;
+  bool extra_checks = false;
   bool no_ftrace_raw = false;
   bool analyze_trace_proto_content = false;
   bool crop_track_events = false;
@@ -714,8 +751,13 @@ Options:
                                       If used with --run-metrics, the query is
                                       executed after the selected metrics and
                                       the metrics output is suppressed.
+ -Q, --query-string QUERY             Execute the SQL query QUERY.
+                                      If used with --run-metrics, the query is
+                                      executed after the selected metrics and
+                                      the metrics output is suppressed.
  -D, --httpd                          Enables the HTTP RPC server.
  --http-port PORT                     Specify what port to run HTTP RPC server.
+ --stdiod                             Enables the stdio RPC server.
  -i, --interactive                    Starts interactive mode even after a query
                                       file is specified with -q or
                                       --run-metrics.
@@ -744,6 +786,9 @@ Feature flags:
  --dev-flag KEY=VALUE                 Set a development flag to the given value.
                                       Does not have any affect unless --dev is
                                       specified.
+ --extra-checks                       Enables additional checks which can catch
+                                      more SQL errors, but which incur
+                                      additional runtime overhead.
 
 Standard library:
  --add-sql-module MODULE_PATH         Files from the directory will be treated
@@ -798,6 +843,7 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
     OPT_ADD_SQL_MODULE,
     OPT_METRIC_EXTENSION,
     OPT_DEV,
+    OPT_EXTRA_CHECKS,
     OPT_OVERRIDE_STDLIB,
     OPT_OVERRIDE_SQL_MODULE,
     OPT_NO_FTRACE_RAW,
@@ -806,17 +852,19 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
     OPT_ANALYZE_TRACE_PROTO_CONTENT,
     OPT_CROP_TRACK_EVENTS,
     OPT_DEV_FLAG,
+    OPT_STDIOD,
   };
 
   static const option long_options[] = {
       {"help", no_argument, nullptr, 'h'},
       {"version", no_argument, nullptr, 'v'},
-      {"debug", no_argument, nullptr, 'd'},
       {"wide", no_argument, nullptr, 'W'},
       {"perf-file", required_argument, nullptr, 'p'},
       {"query-file", required_argument, nullptr, 'q'},
+      {"query-string", required_argument, nullptr, 'Q'},
       {"httpd", no_argument, nullptr, 'D'},
       {"http-port", required_argument, nullptr, OPT_HTTP_PORT},
+      {"stdiod", no_argument, nullptr, OPT_STDIOD},
       {"interactive", no_argument, nullptr, 'i'},
       {"export", required_argument, nullptr, 'e'},
       {"metatrace", required_argument, nullptr, 'm'},
@@ -830,6 +878,7 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
        OPT_ANALYZE_TRACE_PROTO_CONTENT},
       {"crop-track-events", no_argument, nullptr, OPT_CROP_TRACK_EVENTS},
       {"dev", no_argument, nullptr, OPT_DEV},
+      {"extra-checks", no_argument, nullptr, OPT_EXTRA_CHECKS},
       {"add-sql-module", required_argument, nullptr, OPT_ADD_SQL_MODULE},
       {"override-sql-module", required_argument, nullptr,
        OPT_OVERRIDE_SQL_MODULE},
@@ -844,7 +893,7 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
   bool explicit_interactive = false;
   for (;;) {
     int option =
-        getopt_long(argc, argv, "hvWiDdm:p:q:e:", long_options, nullptr);
+        getopt_long(argc, argv, "hvWiDdm:p:q:Q:e:", long_options, nullptr);
 
     if (option == -1)
       break;  // EOF.
@@ -854,11 +903,6 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
       printf("Trace Processor RPC API version: %d\n",
              protos::pbzero::TRACE_PROCESSOR_CURRENT_API_VERSION);
       exit(0);
-    }
-
-    if (option == 'd') {
-      EnableSQLiteVtableDebugging();
-      continue;
     }
 
     if (option == 'W') {
@@ -876,6 +920,11 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
       continue;
     }
 
+    if (option == 'Q') {
+      command_line_options.query_string = optarg;
+      continue;
+    }
+
     if (option == 'D') {
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_HTTPD)
       command_line_options.enable_httpd = true;
@@ -887,6 +936,11 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
 
     if (option == OPT_HTTP_PORT) {
       command_line_options.port_number = optarg;
+      continue;
+    }
+
+    if (option == OPT_STDIOD) {
+      command_line_options.enable_stdiod = true;
       continue;
     }
 
@@ -942,6 +996,11 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
       continue;
     }
 
+    if (option == OPT_EXTRA_CHECKS) {
+      command_line_options.extra_checks = true;
+      continue;
+    }
+
     if (option == OPT_ADD_SQL_MODULE) {
       command_line_options.sql_module_path = optarg;
       continue;
@@ -990,6 +1049,7 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
       explicit_interactive || (command_line_options.pre_metrics_path.empty() &&
                                command_line_options.metric_names.empty() &&
                                command_line_options.query_file_path.empty() &&
+                               command_line_options.query_string.empty() &&
                                command_line_options.sqlite_file_path.empty());
 
   // Only allow non-interactive queries to emit perf data.
@@ -1000,11 +1060,12 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
   }
 
   // The only case where we allow omitting the trace file path is when running
-  // in --http mode. In all other cases, the last argument must be the trace
-  // file.
+  // in --httpd or --stdiod mode. In all other cases, the last argument must be
+  // the trace file.
   if (optind == argc - 1 && argv[optind]) {
     command_line_options.trace_file_path = argv[optind];
-  } else if (!command_line_options.enable_httpd) {
+  } else if (!command_line_options.enable_httpd &&
+             !command_line_options.enable_stdiod) {
     PrintUsage(argv);
     exit(1);
   }
@@ -1071,17 +1132,10 @@ base::Status LoadTrace(const std::string& trace_file_path, double* size_mb) {
           }
         });
   }
-  g_tp->NotifyEndOfFile();
-  return base::OkStatus();
+  return g_tp->NotifyEndOfFile();
 }
 
-base::Status RunQueries(const std::string& query_file_path,
-                        bool expect_output) {
-  std::string queries;
-  if (!base::ReadFile(query_file_path.c_str(), &queries)) {
-    return base::ErrStatus("Unable to read file %s", query_file_path.c_str());
-  }
-
+base::Status RunQueries(const std::string& queries, bool expect_output) {
   base::Status status;
   if (expect_output) {
     status = RunQueriesAndPrintResult(queries, stdout);
@@ -1092,6 +1146,16 @@ base::Status RunQueries(const std::string& query_file_path,
     return base::ErrStatus("%s", status.c_message());
   }
   return base::OkStatus();
+}
+
+base::Status RunQueriesFromFile(const std::string& query_file_path,
+                                bool expect_output) {
+  std::string queries;
+  if (!base::ReadFile(query_file_path.c_str(), &queries)) {
+    return base::ErrStatus("Unable to read file %s", query_file_path.c_str());
+  }
+
+  return RunQueries(queries, expect_output);
 }
 
 base::Status ParseSingleMetricExtensionPath(bool dev,
@@ -1176,7 +1240,7 @@ base::Status IncludeSqlModule(std::string root, bool allow_override) {
 
   std::vector<std::string> paths;
   RETURN_IF_ERROR(base::ListFilesRecursive(root, paths));
-  sql_modules::NameToModule modules;
+  sql_modules::NameToPackage modules;
   for (const auto& path : paths) {
     if (base::GetFileExtension(path) != ".sql")
       continue;
@@ -1192,8 +1256,9 @@ base::Status IncludeSqlModule(std::string root, bool allow_override) {
         .first->push_back({import_key, file_contents});
   }
   for (auto module_it = modules.GetIterator(); module_it; ++module_it) {
-    auto status = g_tp->RegisterSqlModule(
-        {module_it.key(), module_it.value(), allow_override});
+    auto status = g_tp->RegisterSqlPackage({/*name=*/module_it.key(),
+                                            /*files=*/module_it.value(),
+                                            /*allow_override=*/allow_override});
     if (!status.ok())
       return status;
   }
@@ -1208,27 +1273,30 @@ base::Status LoadOverridenStdlib(std::string root) {
   }
 
   if (!base::FileExists(root)) {
-    return base::ErrStatus("Directory %s does not exist.", root.c_str());
+    return base::ErrStatus("Directory '%s' does not exist.", root.c_str());
   }
 
   std::vector<std::string> paths;
   RETURN_IF_ERROR(base::ListFilesRecursive(root, paths));
-  sql_modules::NameToModule modules;
+  sql_modules::NameToPackage packages;
   for (const auto& path : paths) {
     if (base::GetFileExtension(path) != ".sql") {
       continue;
     }
     std::string filename = root + "/" + path;
-    std::string file_contents;
-    if (!base::ReadFile(filename, &file_contents)) {
-      return base::ErrStatus("Cannot read file %s", filename.c_str());
+    std::string module_file;
+    if (!base::ReadFile(filename, &module_file)) {
+      return base::ErrStatus("Cannot read file '%s'", filename.c_str());
     }
-    std::string import_key = sql_modules::GetIncludeKey(path);
-    std::string module = sql_modules::GetModuleName(import_key);
-    modules.Insert(module, {}).first->push_back({import_key, file_contents});
+    std::string module_name = sql_modules::GetIncludeKey(path);
+    std::string package_name = sql_modules::GetPackageName(module_name);
+    packages.Insert(package_name, {})
+        .first->push_back({module_name, module_file});
   }
-  for (auto module_it = modules.GetIterator(); module_it; ++module_it) {
-    g_tp->RegisterSqlModule({module_it.key(), module_it.value(), true});
+  for (auto package = packages.GetIterator(); package; ++package) {
+    g_tp->RegisterSqlPackage({/*name=*/package.key(),
+                              /*files=*/package.value(),
+                              /*allow_override=*/true});
   }
 
   return base::OkStatus();
@@ -1457,7 +1525,7 @@ base::Status StartInteractiveShell(const InteractiveOptions& options) {
       } else if (strcmp(command, "reset") == 0) {
         g_tp->RestoreInitialTables();
       } else if (strcmp(command, "read") == 0 && strlen(arg)) {
-        base::Status status = RunQueries(arg, true);
+        base::Status status = RunQueriesFromFile(arg, true);
         if (!status.ok()) {
           PERFETTO_ELOG("%s", status.c_message());
         }
@@ -1580,6 +1648,10 @@ base::Status TraceProcessorMain(int argc, char** argv) {
     }
   }
 
+  if (options.extra_checks) {
+    config.enable_extra_checks = true;
+  }
+
   std::unique_ptr<TraceProcessor> tp = TraceProcessor::CreateInstance(config);
   g_tp = tp.get();
 
@@ -1636,7 +1708,7 @@ base::Status TraceProcessorMain(int argc, char** argv) {
 
   base::TimeNanos t_query_start = base::GetWallTimeNs();
   if (!options.pre_metrics_path.empty()) {
-    RETURN_IF_ERROR(RunQueries(options.pre_metrics_path, false));
+    RETURN_IF_ERROR(RunQueriesFromFile(options.pre_metrics_path, false));
   }
 
   std::vector<MetricNameAndPath> metrics;
@@ -1650,20 +1722,29 @@ base::Status TraceProcessorMain(int argc, char** argv) {
   }
 
   if (!options.query_file_path.empty()) {
-    base::Status status = RunQueries(options.query_file_path, true);
+    base::Status status = RunQueriesFromFile(options.query_file_path, true);
     if (!status.ok()) {
       // Write metatrace if needed before exiting.
       RETURN_IF_ERROR(MaybeWriteMetatrace(options.metatrace_path));
       return status;
     }
   }
+
+  if (!options.query_string.empty()) {
+    base::Status status = RunQueries(options.query_string, true);
+    if (!status.ok()) {
+      // Write metatrace if needed before exiting.
+      RETURN_IF_ERROR(MaybeWriteMetatrace(options.metatrace_path));
+      return status;
+    }
+  }
+
   base::TimeNanos t_query = base::GetWallTimeNs() - t_query_start;
 
   if (!options.sqlite_file_path.empty()) {
     RETURN_IF_ERROR(ExportTraceToDatabase(options.sqlite_file_path));
   }
 
-#if PERFETTO_BUILDFLAG(PERFETTO_TP_HTTPD)
   if (options.enable_httpd) {
 #if PERFETTO_HAS_SIGNAL_H()
     if (options.metatrace_path.empty()) {
@@ -1680,10 +1761,17 @@ base::Status TraceProcessorMain(int argc, char** argv) {
     }
 #endif
 
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_HTTPD)
     RunHttpRPCServer(std::move(tp), options.port_number);
     PERFETTO_FATAL("Should never return");
-  }
+#else
+    PERFETTO_FATAL("HTTP not available");
 #endif
+  }
+
+  if (options.enable_stdiod) {
+    return RunStdioRpcServer(std::move(tp));
+  }
 
   if (options.launch_shell) {
     RETURN_IF_ERROR(StartInteractiveShell(

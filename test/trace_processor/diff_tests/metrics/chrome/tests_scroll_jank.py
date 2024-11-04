@@ -222,25 +222,25 @@ class ChromeScrollJankMetrics(TestSuite):
 
   def test_chrome_input_to_browser_intervals(self):
     return DiffTestBlueprint(
-        trace=DataPath('scrolling_with_blocked_nonblocked_frames.pftrace'),
+        trace=DataPath('scrolling_with_blocked_nonblocked_frames_new.pftrace'),
         query="""
         SELECT RUN_METRIC('chrome/chrome_input_to_browser_intervals.sql');
 
         SELECT
           *
         FROM chrome_input_to_browser_intervals
-        WHERE window_start_ts >= 60934320005158
-          AND window_start_ts <= 60934338798158;
+        WHERE window_start_ts >= 3882799776944846
+          AND window_start_ts <= 3882799783705731;
         """,
         out=Path('chrome_input_to_browser_intervals.out'))
 
   def test_chrome_scroll_jank_caused_by_scheduling(self):
     return DiffTestBlueprint(
-        trace=DataPath('fling_with_input_delay.pftrace'),
+        trace=DataPath('fling_with_input_delay_new.pftrace'),
         query="""
         SELECT RUN_METRIC('chrome/chrome_scroll_jank_caused_by_scheduling.sql',
           'dur_causes_jank_ms',
-        /* dur_causes_jank_ms = */ '5');
+        /* dur_causes_jank_ms = */ '4');
 
         SELECT
           full_name,
@@ -256,11 +256,11 @@ class ChromeScrollJankMetrics(TestSuite):
 
   def test_chrome_tasks_delaying_input_processing(self):
     return DiffTestBlueprint(
-        trace=DataPath('fling_with_input_delay.pftrace'),
+        trace=DataPath('fling_with_input_delay_new.pftrace'),
         query="""
         SELECT RUN_METRIC('chrome/chrome_tasks_delaying_input_processing.sql',
           'duration_causing_jank_ms',
-         /* duration_causing_jank_ms = */ '8');
+         /* duration_causing_jank_ms = */ '2');
 
         SELECT
           full_name,
@@ -293,11 +293,11 @@ class ChromeScrollJankMetrics(TestSuite):
   # long_task_tracking_trace_chrome_long_tasks_delaying_input_processing_compare_default_test.out
   def test_experimental_reliable_chrome_tasks_delaying_input_processing(self):
     return DiffTestBlueprint(
-        trace=DataPath('fling_with_input_delay.pftrace'),
+        trace=DataPath('fling_with_input_delay_new.pftrace'),
         query="""
         SELECT RUN_METRIC(
             'chrome/experimental_reliable_chrome_tasks_delaying_input_processing.sql',
-            'duration_causing_jank_ms', '8');
+            'duration_causing_jank_ms', '2');
 
         SELECT
           full_name,
@@ -429,33 +429,128 @@ class ChromeScrollJankMetrics(TestSuite):
         query=Metric('chrome_scroll_jank_v3'),
         out=TextProto(r"""
         [perfetto.protos.chrome_scroll_jank_v3] {
-          trace_num_frames: 291
-          trace_num_janky_frames: 3
-          trace_scroll_jank_percentage: 1.0309278350515463
-          vsync_interval_ms: 16.368
+          trace_num_frames: 364
+          trace_num_janky_frames: 6
+          trace_scroll_jank_percentage: 1.6483516483516483
+          vsync_interval_ms: 10.318
           scrolls {
-            num_frames: 105
-            num_janky_frames: 2
-            scroll_jank_percentage: 1.9047619047619047
-            max_delay_since_last_frame: 6.126221896383187
+            num_frames: 119
+            num_janky_frames: 1
+            scroll_jank_percentage: 0.8403361344537815
+            max_delay_since_last_frame: 2.153421205660012
             scroll_jank_causes {
-              cause: "RendererCompositorQueueingDelay"
-              delay_since_last_frame: 2.044354838709678
-            }
-            scroll_jank_causes {
-              cause: "RendererCompositorFinishedToBeginImplFrame"
-              delay_since_last_frame: 6.126221896383187
+              cause: "SubmitCompositorFrameToPresentationCompositorFrame"
+              sub_cause: "StartDrawToSwapStart"
+              delay_since_last_frame: 2.153421205660012
             }
           }
           scrolls {
-            num_frames: 84
+            num_frames: 6
             num_janky_frames: 1
-            scroll_jank_percentage: 1.1904761904761905
-            max_delay_since_last_frame: 2.040811339198436
+            scroll_jank_percentage: 16.666666666666668
+            max_delay_since_last_frame: 2.155456483814693
+            scroll_jank_causes {
+              cause: "SubmitCompositorFrameToPresentationCompositorFrame"
+              sub_cause: "StartDrawToSwapStart"
+              delay_since_last_frame: 2.155456483814693
+            }
+          }
+          scrolls {
+            num_frames: 129
+            num_janky_frames: 4
+            scroll_jank_percentage: 3.10077519379845
+            max_delay_since_last_frame: 2.1642760224849775
+            scroll_jank_causes {
+              cause: "SubmitCompositorFrameToPresentationCompositorFrame"
+              sub_cause: "StartDrawToSwapStart"
+              delay_since_last_frame: 2.1556503198294243
+            }
+            scroll_jank_causes {
+              cause: "SubmitCompositorFrameToPresentationCompositorFrame"
+              sub_cause: "BufferReadyToLatch"
+              delay_since_last_frame: 2.1564256638883506
+            }
+            scroll_jank_causes {
+              cause: "SubmitCompositorFrameToPresentationCompositorFrame"
+              sub_cause: "StartDrawToSwapStart"
+              delay_since_last_frame: 2.15758867997674
+            }
             scroll_jank_causes {
               cause: "RendererCompositorQueueingDelay"
-              delay_since_last_frame: 2.040811339198436
+              delay_since_last_frame: 2.1642760224849775
             }
           }
         }
+        """))
+
+  def test_has_descendant_slice_with_name_true(self):
+    return DiffTestBlueprint(
+        # We need a trace with a large number of non-chrome slices, so that the
+        # reliable range is affected by their filtering.
+        trace=DataPath('chrome_input_with_frame_view.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3;
+
+        SELECT
+          HAS_DESCENDANT_SLICE_WITH_NAME(
+            (SELECT id from slice where dur = 60156000),
+            'SwapEndToPresentationCompositorFrame') AS has_descendant;
+        """,
+        out=Csv("""
+        "has_descendant"
+        1
+        """))
+
+  def test_has_descendant_slice_with_name_false(self):
+    return DiffTestBlueprint(
+        # We need a trace with a large number of non-chrome slices, so that the
+        # reliable range is affected by their filtering.
+        trace=DataPath('chrome_input_with_frame_view.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3;
+
+        SELECT
+          HAS_DESCENDANT_SLICE_WITH_NAME(
+            (SELECT id from slice where dur = 77247000),
+            'SwapEndToPresentationCompositorFrame') AS has_descendant;
+        """,
+        out=Csv("""
+        "has_descendant"
+        0
+        """))
+
+  def test_descendant_slice_null(self):
+    return DiffTestBlueprint(
+        # We need a trace with a large number of non-chrome slices, so that the
+        # reliable range is affected by their filtering.
+        trace=DataPath('chrome_input_with_frame_view.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3;
+
+        SELECT
+          _DESCENDANT_SLICE_END(
+            (SELECT id from slice where dur = 77247000),
+            'SwapEndToPresentationCompositorFrame') AS end_ts;
+        """,
+        out=Csv("""
+        "end_ts"
+        "[NULL]"
+        """))
+
+  def test_descendant_slice(self):
+    return DiffTestBlueprint(
+        # We need a trace with a large number of non-chrome slices, so that the
+        # reliable range is affected by their filtering.
+        trace=DataPath('chrome_input_with_frame_view.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE chrome.scroll_jank.scroll_jank_v3;
+
+        SELECT
+          _DESCENDANT_SLICE_END(
+            (SELECT id from slice where dur = 60156000),
+            'SwapEndToPresentationCompositorFrame') AS end_ts;
+        """,
+        out=Csv("""
+        "end_ts"
+        1035869424631926
         """))

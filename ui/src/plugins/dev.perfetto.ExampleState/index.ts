@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  Plugin,
-  PluginContext,
-  PluginContextTrace,
-  PluginDescriptor,
-} from '../../public';
+import {createStore, Store} from '../../base/store';
+import {exists} from '../../base/utils';
+import {Trace} from '../../public/trace';
+import {PerfettoPlugin, PluginDescriptor} from '../../public/plugin';
+import {addQueryResultsTab} from '../../public/lib/query_table/query_result_tab';
 
 interface State {
   counter: number;
@@ -25,33 +24,43 @@ interface State {
 
 // This example plugin shows using state that is persisted in the
 // permalink.
-class ExampleState implements Plugin {
+class ExampleState implements PerfettoPlugin {
+  private store: Store<State> = createStore({counter: 0});
+
   private migrate(initialState: unknown): State {
-    if (initialState && typeof initialState === 'object' &&
-        'counter' in initialState && typeof initialState.counter === 'number') {
+    if (
+      exists(initialState) &&
+      typeof initialState === 'object' &&
+      'counter' in initialState &&
+      typeof initialState.counter === 'number'
+    ) {
       return {counter: initialState.counter};
     } else {
       return {counter: 0};
     }
   }
 
-  onActivate(_: PluginContext): void {
-    //
-  }
+  async onTraceLoad(ctx: Trace): Promise<void> {
+    this.store = ctx.mountStore((init: unknown) => this.migrate(init));
 
-  async onTraceLoad(ctx: PluginContextTrace): Promise<void> {
-    const store = ctx.mountStore((init: unknown) => this.migrate(init));
-
-    ctx.registerCommand({
+    ctx.commands.registerCommand({
       id: 'dev.perfetto.ExampleState#ShowCounter',
       name: 'Show ExampleState counter',
       callback: () => {
-        const counter = store.state.counter;
-        ctx.tabs.openQuery(
-            `SELECT ${counter} as counter;`, `Show counter ${counter}`);
-        store.edit((draft) => ++draft.counter);
+        const counter = this.store.state.counter;
+        addQueryResultsTab(ctx, {
+          query: `SELECT ${counter} as counter;`,
+          title: `Show counter ${counter}`,
+        });
+        this.store.edit((draft) => {
+          ++draft.counter;
+        });
       },
     });
+  }
+
+  async onTraceUnload(_: Trace): Promise<void> {
+    this.store[Symbol.dispose]();
   }
 }
 

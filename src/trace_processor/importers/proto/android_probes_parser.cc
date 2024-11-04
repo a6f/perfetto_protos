@@ -60,6 +60,7 @@ AndroidProbesParser::AndroidProbesParser(TraceProcessorContext* context)
       batt_current_avg_id_(
           context->storage->InternString("batt.current.avg_ua")),
       batt_voltage_id_(context->storage->InternString("batt.voltage_uv")),
+      batt_power_id_(context->storage->InternString("batt.power_mw")),
       screen_state_id_(context->storage->InternString("ScreenState")),
       device_state_id_(context->storage->InternString("DeviceStateChanged")),
       battery_status_id_(context->storage->InternString("BatteryStatus")),
@@ -73,6 +74,7 @@ void AndroidProbesParser::ParseBatteryCounters(int64_t ts, ConstBytes blob) {
   StringId batt_current_id = batt_current_id_;
   StringId batt_current_avg_id = batt_current_avg_id_;
   StringId batt_voltage_id = batt_voltage_id_;
+  StringId batt_power_id = batt_power_id_;
   if (evt.has_name()) {
     std::string batt_name = evt.name().ToStdString();
     batt_charge_id = context_->storage->InternString(base::StringView(
@@ -85,6 +87,8 @@ void AndroidProbesParser::ParseBatteryCounters(int64_t ts, ConstBytes blob) {
         std::string("batt.").append(batt_name).append(".current.avg_ua")));
     batt_voltage_id = context_->storage->InternString(base::StringView(
         std::string("batt.").append(batt_name).append(".voltage_uv")));
+    batt_power_id = context_->storage->InternString(base::StringView(
+        std::string("batt.").append(batt_name).append(".power_mw")));
   }
   if (evt.has_charge_counter_uah()) {
     TrackId track = context_->track_tracker->InternGlobalCounterTrack(
@@ -126,6 +130,15 @@ void AndroidProbesParser::ParseBatteryCounters(int64_t ts, ConstBytes blob) {
         TrackTracker::Group::kPower, batt_voltage_id);
     context_->event_tracker->PushCounter(
         ts, static_cast<double>(evt.voltage_uv()), track);
+  }
+  if (evt.has_current_ua() && evt.has_voltage_uv()) {
+    // Calculate power from current and voltage.
+    TrackId track = context_->track_tracker->InternGlobalCounterTrack(
+        TrackTracker::Group::kPower, batt_power_id);
+    auto current = evt.current_ua();
+    auto voltage = evt.voltage_uv();
+    context_->event_tracker->PushCounter(
+        ts, static_cast<double>(current * voltage / 1000000000), track);
   }
 }
 
@@ -189,8 +202,9 @@ void AndroidProbesParser::ParseEnergyBreakdown(int64_t ts, ConstBytes blob) {
   auto consumer_type = energy_consumer_specs->type;
   auto ordinal = energy_consumer_specs->ordinal;
 
-  TrackId energy_track = context_->track_tracker->InternEnergyCounterTrack(
-      consumer_name, consumer_id, consumer_type, ordinal);
+  TrackId energy_track =
+      context_->track_tracker->LegacyInternLegacyEnergyCounterTrack(
+          consumer_name, consumer_id, consumer_type, ordinal);
   context_->event_tracker->PushCounter(ts, total_energy, energy_track);
 
   // Consumers providing per-uid energy breakdown
@@ -205,7 +219,7 @@ void AndroidProbesParser::ParseEnergyBreakdown(int64_t ts, ConstBytes blob) {
     }
 
     TrackId energy_uid_track =
-        context_->track_tracker->InternEnergyPerUidCounterTrack(
+        context_->track_tracker->LegacyInternLegacyEnergyPerUidCounterTrack(
             consumer_name, consumer_id, breakdown.uid());
     context_->event_tracker->PushCounter(
         ts, static_cast<double>(breakdown.energy_uws()), energy_uid_track);
@@ -438,7 +452,8 @@ void AndroidProbesParser::ParseAndroidSystemProperty(int64_t ts,
           context_->async_track_set_tracker->Scoped(track_set_id, ts, 0);
       context_->slice_tracker->Scoped(ts, track_id, kNullStringId, state_id, 0);
     } else if (name.StartsWith("debug.tracing.battery_stats.") ||
-               name == "debug.tracing.mcc" || name == "debug.tracing.mnc") {
+               name == "debug.tracing.mcc" || name == "debug.tracing.mnc" ||
+               name == "debug.tracing.desktop_mode_visible_tasks") {
       StringId name_id = context_->storage->InternString(
           name.substr(strlen("debug.tracing.")));
       std::optional<int32_t> state =

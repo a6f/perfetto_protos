@@ -13,47 +13,37 @@
 // limitations under the License.
 
 import m from 'mithril';
-
 import {raf} from '../core/raf_scheduler';
-import {EngineProxy} from '../trace_processor/engine';
 import {Editor} from '../widgets/editor';
 import {VegaView} from '../widgets/vega_view';
-
-import {globals} from './globals';
-import {createPage} from './pages';
-
-function getEngine(): EngineProxy|undefined {
-  const engineId = globals.getCurrentEngine()?.id;
-  if (engineId === undefined) {
-    return undefined;
-  }
-  const engine = globals.engines.get(engineId)?.getProxy('VizPage');
-  return engine;
-}
-
+import {PageWithTraceAttrs} from './pages';
+import {assertExists} from '../base/logging';
+import {Engine} from '../trace_processor/engine';
 
 let SPEC = '';
-let ENGINE: EngineProxy|undefined = undefined;
 
-export const VizPage = createPage({
-  oncreate() {
-    ENGINE = getEngine();
-  },
+export class VizPage implements m.ClassComponent<PageWithTraceAttrs> {
+  private engine?: Engine;
+
+  oninit({attrs}: m.CVnode<PageWithTraceAttrs>) {
+    this.engine = attrs.trace.engine.getProxy('VizPage');
+  }
 
   view() {
+    const engine = assertExists(this.engine);
     return m(
-        '.viz-page',
-        m(VegaView, {
-          spec: SPEC,
-          engine: ENGINE,
-          data: {},
-        }),
-        m(Editor, {
-          onUpdate: (text: string) => {
-            SPEC = text;
-            raf.scheduleFullRedraw();
-          },
-        }),
+      '.viz-page',
+      m(VegaView, {
+        spec: SPEC,
+        engine: engine,
+        data: {},
+      }),
+      m(Editor, {
+        onUpdate: (text: string) => {
+          SPEC = text;
+          raf.scheduleFullRedraw();
+        },
+      }),
     );
-  },
-});
+  }
+}

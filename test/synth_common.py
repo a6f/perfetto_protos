@@ -23,6 +23,14 @@ CLONE_VFORK = 0x00004000
 CLONE_VM = 0x00000100
 
 
+# For compatibility with older pb module versions.
+def get_message_class(pool, msg):
+  if hasattr(message_factory, "GetMessageClass"):
+    return message_factory.GetMessageClass(msg)
+  else:
+    return message_factory.MessageFactory(pool).GetPrototype(msg)
+
+
 def ms_to_ns(time_in_ms):
   return int(time_in_ms * 1000000)
 
@@ -207,8 +215,8 @@ class Trace(object):
       thread.name = name
     self.proc_map[tid] = cmdline
 
-  def add_battery_counters(self, ts, charge_uah, cap_prct, curr_ua,
-                           curr_avg_ua):
+  def add_battery_counters(self, ts, charge_uah, cap_prct, curr_ua, curr_avg_ua,
+                           voltage_uv):
     self.packet = self.trace.packet.add()
     self.packet.timestamp = ts
     battery_count = self.packet.battery
@@ -216,6 +224,7 @@ class Trace(object):
     battery_count.capacity_percent = cap_prct
     battery_count.current_ua = curr_ua
     battery_count.current_avg_ua = curr_avg_ua
+    battery_count.voltage_uv = voltage_uv
 
   def add_binder_transaction(self, transaction_id, ts_start, ts_end, tid, pid,
                              reply_id, reply_ts_start, reply_ts_end, reply_tid,
@@ -247,13 +256,14 @@ class Trace(object):
     reply_binder_transaction_received.debug_id = reply_id
 
   def add_battery_counters_no_curr_ua(self, ts, charge_uah, cap_prct,
-                                      curr_avg_ua):
+                                      curr_avg_ua, voltage_uv):
     self.packet = self.trace.packet.add()
     self.packet.timestamp = ts
     battery_count = self.packet.battery
     battery_count.charge_counter_uah = charge_uah
     battery_count.capacity_percent = cap_prct
     battery_count.current_avg_ua = curr_avg_ua
+    battery_count.voltage_uv = voltage_uv
 
   def add_power_rails_desc(self, index_val, name):
     power_rails = self.packet.power_rails
@@ -831,9 +841,8 @@ def create_trace():
   args = parser.parse_args()
 
   pool = create_pool(args)
-  factory = message_factory.MessageFactory(pool)
-  ProtoTrace = factory.GetPrototype(
-      pool.FindMessageTypeByName('perfetto.protos.Trace'))
+  ProtoTrace = get_message_class(
+      pool, pool.FindMessageTypeByName('perfetto.protos.Trace'))
 
   class EnumPrototype(object):
 
@@ -866,17 +875,19 @@ def create_trace():
   )
 
   prototypes = Prototypes(
-      TrackEvent=factory.GetPrototype(
-          pool.FindMessageTypeByName('perfetto.protos.TrackEvent')),
+      TrackEvent=get_message_class(
+          pool, pool.FindMessageTypeByName('perfetto.protos.TrackEvent')),
       ChromeRAILMode=EnumPrototype.from_descriptor(
           pool.FindEnumTypeByName('perfetto.protos.ChromeRAILMode')),
       ChromeLatencyInfo=chrome_latency_info_prototypes,
-      ChromeProcessDescriptor=factory.GetPrototype(
+      ChromeProcessDescriptor=get_message_class(
+          pool,
           pool.FindMessageTypeByName(
               'perfetto.protos.ChromeProcessDescriptor')),
-      CounterDescriptor=factory.GetPrototype(
+      CounterDescriptor=get_message_class(
+          pool,
           pool.FindMessageTypeByName('perfetto.protos.CounterDescriptor')),
-      ThreadDescriptor=factory.GetPrototype(
-          pool.FindMessageTypeByName('perfetto.protos.ThreadDescriptor')),
+      ThreadDescriptor=get_message_class(
+          pool, pool.FindMessageTypeByName('perfetto.protos.ThreadDescriptor')),
   )
   return Trace(ProtoTrace(), prototypes)

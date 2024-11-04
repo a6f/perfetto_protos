@@ -190,6 +190,11 @@ enum perf_event_type {
   PERF_RECORD_CGROUP = 19,
   PERF_RECORD_TEXT_POKE = 20,
   PERF_RECORD_AUX_OUTPUT_HW_ID = 21,
+
+  PERF_RECORD_USER_TYPE_START = 64,
+  PERF_RECORD_AUXTRACE_INFO = 70,
+  PERF_RECORD_AUXTRACE = 71,
+  PERF_RECORD_TIME_CONV = 79,
   PERF_RECORD_MAX, /* non-ABI */
 };
 
@@ -221,6 +226,59 @@ enum perf_event_sample_format {
   PERF_SAMPLE_WEIGHT_STRUCT = 1U << 24,
 
   PERF_SAMPLE_MAX = 1U << 25, /* non-ABI */
+};
+
+constexpr auto kPerfRecordMiscCpumodeMask = 0x7;
+
+enum perf_record_misc {
+  PERF_RECORD_MISC_CPUMODE_UNKNOWN = 0,
+  PERF_RECORD_MISC_KERNEL = 1,
+  PERF_RECORD_MISC_USER = 2,
+  PERF_RECORD_MISC_HYPERVISOR = 3,
+  PERF_RECORD_MISC_GUEST_KERNEL = 4,
+  PERF_RECORD_MISC_GUEST_USER = 5,
+
+  PERF_RECORD_MISC_MMAP_BUILD_ID = 1U << 14,
+  PERF_RECORD_MISC_EXT_RESERVED = 1U << 15,
+};
+
+enum perf_event_read_format {
+  PERF_FORMAT_TOTAL_TIME_ENABLED = 1U << 0,
+  PERF_FORMAT_TOTAL_TIME_RUNNING = 1U << 1,
+  PERF_FORMAT_ID = 1U << 2,
+  PERF_FORMAT_GROUP = 1U << 3,
+  PERF_FORMAT_LOST = 1U << 4,
+
+  PERF_FORMAT_MAX = 1U << 5, /* non-ABI */
+};
+
+enum perf_callchain_context : uint64_t {
+  PERF_CONTEXT_HV = static_cast<uint64_t>(-32),
+  PERF_CONTEXT_KERNEL = static_cast<uint64_t>(-128),
+  PERF_CONTEXT_USER = static_cast<uint64_t>(-512),
+
+  PERF_CONTEXT_GUEST = static_cast<uint64_t>(-2048),
+  PERF_CONTEXT_GUEST_KERNEL = static_cast<uint64_t>(-2176),
+  PERF_CONTEXT_GUEST_USER = static_cast<uint64_t>(-2560),
+
+  PERF_CONTEXT_MAX = static_cast<uint64_t>(-4095),
+};
+
+enum auxtrace_type {
+  PERF_AUXTRACE_UNKNOWN,
+  PERF_AUXTRACE_INTEL_PT,
+  PERF_AUXTRACE_INTEL_BTS,
+  PERF_AUXTRACE_CS_ETM,
+  PERF_AUXTRACE_ARM_SPE,
+  PERF_AUXTRACE_S390_CPUMSF,
+  PERF_AUXTRACE_HISI_PTT,
+};
+
+enum perf_aux_flag {
+  PERF_AUX_FLAG_TRUNCATED = 1U << 0,
+  PERF_AUX_FLAG_OVERWRITE = 1U << 1,
+  PERF_AUX_FLAG_PARTIAL = 1U << 2,
+  PERF_AUX_FLAG_COLLISION = 1U << 3,
 };
 
 #endif  // SRC_TRACE_PROCESSOR_IMPORTERS_PERF_PERF_EVENT_H_

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (C) 2023 The Android Open Source Project
+# Copyright (C) 2024 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,87 +13,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from python.generators.diff_tests.testing import Path, DataPath, Metric
-from python.generators.diff_tests.testing import Csv, Json, TextProto
+from python.generators.diff_tests.testing import Path, DataPath, Metric, Systrace
+from python.generators.diff_tests.testing import Csv, Json, TextProto, BinaryProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import TestSuite
+from python.generators.diff_tests.testing import PrintProfileProto
 
 
-class LinuxStdlib(TestSuite):
+class LinuxTests(TestSuite):
 
-  def test_linux_cpu_idle_stats(self):
-      return DiffTestBlueprint(
-          trace=TextProto(r"""
-          packet {
-            ftrace_events {
-              cpu: 0
-              event: {
-                timestamp: 200000000000
-                pid: 2
-                cpu_frequency: {
-                  state : 1704000
-                  cpu_id: 0
-                }
-              }
-              event: {
-                timestamp: 200000000000
-                pid: 2
-                cpu_idle: {
-                  state: 4294967295
-                  cpu_id: 0
-                }
-              }
-              event {
-                timestamp: 200001000000
-                pid: 2
-                cpu_idle: {
-                  state : 1
-                  cpu_id: 0
-                }
-              }
-              event: {
-                timestamp: 200002000000
-                pid  : 2
-                cpu_idle: {
-                  state : 4294967295
-                  cpu_id: 0
-                }
-              }
-              event {
-                timestamp: 200003000000
-                pid: 2
-                cpu_idle: {
-                  state : 1
-                  cpu_id: 0
-                }
-              }
-              event: {
-                timestamp: 200004000000
-                pid: 2
-                cpu_idle: {
-                  state : 4294967295
-                  cpu_id: 0
-                }
-              }
-              event: {
-                timestamp: 200005000000
-                pid: 2
-                cpu_frequency: {
-                  state: 300000
-                  cpu_id: 0
-                }
-              }
-            }
-            trusted_uid: 9999
-            trusted_packet_sequence_id: 2
-          }
-         """),
-         query="""
-         INCLUDE PERFETTO MODULE linux.cpu_idle;
-         SELECT * FROM linux_cpu_idle_stats;
-         """,
-         out=Csv("""
-         "cpu","state","count","dur","avg_dur","idle_percent"
-         0,2,2,2000000,1000000,50.000013
-         """))
+  def test_kernel_threads(self):
+    return DiffTestBlueprint(
+        trace=DataPath('android_postboot_unlock.pftrace'),
+        query="""
+        INCLUDE PERFETTO MODULE linux.threads;
 
+        SELECT upid, utid, pid, tid, process_name, thread_name
+        FROM linux_kernel_threads
+        ORDER by utid LIMIT 10;
+        """,
+        out=Csv("""
+        "upid","utid","pid","tid","process_name","thread_name"
+        7,14,510,510,"sugov:0","sugov:0"
+        89,23,1365,1365,"com.google.usf.","com.google.usf."
+        87,37,1249,1249,"irq/357-dwc3","irq/357-dwc3"
+        31,38,6,6,"kworker/u16:0","kworker/u16:0"
+        11,42,511,511,"sugov:4","sugov:4"
+        83,43,1152,1152,"irq/502-fts_ts","irq/502-fts_ts"
+        93,44,2374,2374,"csf_sync_update","csf_sync_update"
+        18,45,2379,2379,"csf_kcpu_0","csf_kcpu_0"
+        12,47,247,247,"decon0_kthread","decon0_kthread"
+        65,48,159,159,"spi0","spi0"
+            """))

@@ -18,7 +18,6 @@
 
 #include <memory>
 
-#include "src/base/test/gtest_test_suite.h"
 #include "test/gtest_and_gmock.h"
 
 namespace perfetto {
@@ -143,7 +142,7 @@ TEST(RowMapUnittest, SelectRowsFromRangeWithBV) {
   RowMap rm(10, 20);
   // BitVector with values at 16, 18, 20 and so on.
   RowMap selector(
-      BitVector::Range(4, 8, [](uint32_t x) { return x % 2 == 0; }));
+      BitVector::RangeForTesting(4, 8, [](uint32_t x) { return x % 2 == 0; }));
   RowMap selected = rm.SelectRows(selector);
   ASSERT_EQ(selected.size(), 2u);
   ASSERT_EQ(selected.Get(0), 14u);
@@ -158,7 +157,8 @@ TEST(RowMapUnittest, SelectRowsFromRangeWithIV) {
 }
 
 TEST(RowMapUnittest, SelectRowsFromBVWithRange) {
-  RowMap rm(BitVector::Range(10, 50, [](uint32_t x) { return x % 2 == 0; }));
+  RowMap rm(BitVector::RangeForTesting(10, 50,
+                                       [](uint32_t x) { return x % 2 == 0; }));
 
   RowMap selector(4, 8);
   RowMap selected = rm.SelectRows(selector);
@@ -167,17 +167,19 @@ TEST(RowMapUnittest, SelectRowsFromBVWithRange) {
 }
 
 TEST(RowMapUnittest, SelectRowsFromBVWithBV) {
-  RowMap rm(BitVector::Range(10, 50, [](uint32_t x) { return x % 2 == 0; }));
+  RowMap rm(BitVector::RangeForTesting(10, 50,
+                                       [](uint32_t x) { return x % 2 == 0; }));
   // BitVector with values at 16, 18, 20 and so on.
   RowMap selector(
-      BitVector::Range(4, 8, [](uint32_t x) { return x % 2 == 0; }));
+      BitVector::RangeForTesting(4, 8, [](uint32_t x) { return x % 2 == 0; }));
   RowMap selected = rm.SelectRows(selector);
   ASSERT_EQ(selected.size(), 2u);
   ASSERT_EQ(selected.Get(0), 18u);
 }
 
 TEST(RowMapUnittest, SelectRowsFromBVWithIV) {
-  RowMap rm(BitVector::Range(10, 50, [](uint32_t x) { return x % 2 == 0; }));
+  RowMap rm(BitVector::RangeForTesting(10, 50,
+                                       [](uint32_t x) { return x % 2 == 0; }));
   RowMap selector(std::vector<uint32_t>{4, 6});
   RowMap selected = rm.SelectRows(selector);
   ASSERT_EQ(selected.size(), 2u);
@@ -196,7 +198,7 @@ TEST(RowMapUnittest, SelectRowsFromIVWithRange) {
 TEST(RowMapUnittest, SelectRowsFromIVWithBV) {
   RowMap rm(std::vector<uint32_t>{10, 12, 14, 16, 18, 20, 22, 24});
   RowMap selector(
-      BitVector::Range(4, 8, [](uint32_t x) { return x % 2 == 0; }));
+      BitVector::RangeForTesting(4, 8, [](uint32_t x) { return x % 2 == 0; }));
   RowMap selected = rm.SelectRows(selector);
   ASSERT_EQ(selected.size(), 2u);
   ASSERT_EQ(selected.Get(0), 18u);

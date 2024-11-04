@@ -1,6 +1,7 @@
 android_startup {
   startup {
     startup_id: 1
+    cpu_count: 1
     package_name: "com.google.android.calendar"
     zygote_new_process: false
     to_first_frame {
@@ -32,6 +33,7 @@ android_startup {
   }
   startup {
     startup_id: 2
+    cpu_count: 1
     package_name: "com.google.android.calculator"
     zygote_new_process: false
     to_first_frame {
@@ -62,12 +64,24 @@ android_startup {
       dex2oat_dur_ns: 5
     }
     slow_start_reason: "dex2oat running during launch"
-    slow_start_reason_detailed {
+    slow_start_reason_with_details {
+      reason_id: DEX2OAT_RUNNING
       reason: "dex2oat running during launch"
+      severity: WARNING
+      expected_value {
+        value: 0
+        unit: TRUE_OR_FALSE
+      }
+      actual_value {
+        value: 1
+      }
+      launch_dur: 100
+      additional_info: "Process: dex2oat64"
     }
   }
   startup {
     startup_id: 3
+    cpu_count: 1
     package_name: "com.google.android.deskclock"
     zygote_new_process: false
     to_first_frame {
@@ -98,12 +112,24 @@ android_startup {
       dex2oat_dur_ns: 0
     }
     slow_start_reason: "installd running during launch"
-    slow_start_reason_detailed {
+    slow_start_reason_with_details {
+      reason_id: INSTALLD_RUNNING
       reason: "installd running during launch"
+      severity: ERROR
+      expected_value {
+        value: 0
+        unit: TRUE_OR_FALSE
+      }
+      actual_value {
+        value: 1
+      }
+      launch_dur: 100
+      additional_info: "Process: installd"
     }
   }
   startup {
     startup_id: 4
+    cpu_count: 1
     package_name: "com.google.android.gm"
     zygote_new_process: false
     to_first_frame {
@@ -136,11 +162,33 @@ android_startup {
     }
     slow_start_reason: "dex2oat running during launch"
     slow_start_reason: "installd running during launch"
-    slow_start_reason_detailed {
+    slow_start_reason_with_details {
+      reason_id: DEX2OAT_RUNNING
       reason: "dex2oat running during launch"
+      severity: WARNING
+      expected_value {
+        value: 0
+        unit: TRUE_OR_FALSE
+      }
+      actual_value {
+        value: 1
+      }
+      launch_dur: 100
+      additional_info: "Process: dex2oat64"
     }
-    slow_start_reason_detailed {
+    slow_start_reason_with_details {
+      reason_id: INSTALLD_RUNNING
       reason: "installd running during launch"
+      severity: ERROR
+      expected_value {
+        value: 0
+        unit: TRUE_OR_FALSE
+      }
+      actual_value {
+        value: 1
+      }
+      launch_dur: 100
+      additional_info: "Process: installd"
     }
   }
 }

@@ -33,14 +33,15 @@ perfetto_unittest_source_set("test_support") {
     "../../base",
     "../../base:test_support",
     "../core",
-    "../core:service",
     "../core:test_support",
+    "../service",
   ]
   sources = [
     "aligned_buffer_test.cc",
     "aligned_buffer_test.h",
     "fake_packet.cc",
     "fake_packet.h",
+    "test_shared_memory.cc",
     "test_shared_memory.h",
     "traced_value_test_support.cc",
   ]
@@ -54,6 +55,8 @@ perfetto_unittest_source_set("test_support") {
       "mock_producer.cc",
       "mock_producer.h",
       "mock_producer_endpoint.h",
+      "proxy_producer_endpoint.cc",
+      "proxy_producer_endpoint.h",
     ]
   }
 }
@@ -67,10 +70,10 @@ if (enable_perfetto_ipc && enable_perfetto_system_consumer) {
       "../../../gn:gtest_and_gmock",
       "../../base",
       "../../base:test_support",
-      "../core:service",
       "../ipc/consumer",
       "../ipc/producer",
       "../ipc/service",
+      "../service",
     ]
     sources = [ "tracing_integration_test.cc" ]
 
@@ -113,11 +116,11 @@ if (enable_perfetto_integration_tests) {
       "../../../protos/perfetto/trace/interned_data:zero",
       "../../../protos/perfetto/trace/profiling:cpp",
       "../../../protos/perfetto/trace/track_event:cpp",
+      "../../../test:integrationtest_initializer",
       "../../base",
     ]
     sources = [
       "api_integrationtest.cc",
-      "api_integrationtest_main.cc",
       "tracing_module.cc",
       "tracing_module.h",
       "tracing_module2.cc",

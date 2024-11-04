@@ -13,14 +13,10 @@
 // limitations under the License.
 
 import m from 'mithril';
-
-import {raf} from '../../core/raf_scheduler';
-import {globals} from '../globals';
-import {fullscreenModalContainer, ModalDefinition} from '../modal';
+import {showModal} from '../../widgets/modal';
 import {ArgumentPopup} from '../pivot_table_argument_popup';
 
 export class AttributeModalHolder {
-  showModal = false;
   typedArgument = '';
 
   callback: (arg: string) => void;
@@ -30,21 +26,9 @@ export class AttributeModalHolder {
   }
 
   start() {
-    this.showModal = true;
-    fullscreenModalContainer.createNew(this.renderModal());
-    raf.scheduleFullRedraw();
-  }
-
-  private renderModal(): ModalDefinition {
-    return {
+    showModal({
       title: 'Enter argument name',
-      content: m(ArgumentPopup, {
-        knownArguments:
-            globals.state.nonSerializableState.pivotTable.argumentNames,
-        onArgumentChange: (arg) => {
-          this.typedArgument = arg;
-        },
-      }),
+      content: () => this.renderModalContents(),
       buttons: [
         {
           text: 'Add',
@@ -54,17 +38,14 @@ export class AttributeModalHolder {
           },
         },
       ],
-      onClose: () => {
-        this.showModal = false;
-      },
-    };
+    });
   }
 
-  // A method that should be called in `view` method of whatever component is
-  // using the attribute modal.
-  update() {
-    if (this.showModal) {
-      fullscreenModalContainer.updateVdom(this.renderModal());
-    }
+  private renderModalContents() {
+    return m(ArgumentPopup, {
+      onArgumentChange: (arg) => {
+        this.typedArgument = arg;
+      },
+    });
   }
 }

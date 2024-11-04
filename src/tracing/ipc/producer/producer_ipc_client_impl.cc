@@ -66,7 +66,7 @@ std::unique_ptr<TracingService::ProducerEndpoint> ProducerIPCClient::Connect(
                ProducerIPCClient::ConnectionFlags::kRetryIfUnreachable},
           producer, producer_name, task_runner, smb_scraping_mode,
           shared_memory_size_hint_bytes, shared_memory_page_size_hint_bytes,
-          std::move(shm), std::move(shm_arbiter), CreateSocketAsync()));
+          std::move(shm), std::move(shm_arbiter), nullptr));
 }
 
 // static. (Declared in include/tracing/ipc/producer_ipc_client.h).
@@ -230,7 +230,7 @@ void ProducerIPCClientImpl::OnConnect() {
                                   std::move(on_cmd));
 
   // If there are pending Sync() requests, send them now.
-  for (const auto& pending_sync : pending_sync_reqs_)
+  for (auto& pending_sync : pending_sync_reqs_)
     Sync(std::move(pending_sync));
   pending_sync_reqs_.clear();
 }

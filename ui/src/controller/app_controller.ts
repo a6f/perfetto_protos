@@ -13,12 +13,8 @@
 // limitations under the License.
 
 import {RECORDING_V2_FLAG} from '../core/feature_flags';
-import {globals} from '../frontend/globals';
-
 import {Child, Controller, ControllerInitializerAny} from './controller';
-import {PermalinkController} from './permalink_controller';
 import {RecordController} from './record_controller';
-import {TraceController} from './trace_controller';
 
 // The root controller for the entire app. It handles the lifetime of all
 // the other controllers (e.g., track and query controllers) according to the
@@ -40,15 +36,11 @@ export class AppController extends Controller<'main'> {
   // - An internal promise of a nested controller being resolved and manually
   //   re-triggering the controllers.
   run() {
-    const childControllers: ControllerInitializerAny[] =
-        [Child('permalink', PermalinkController, {})];
+    const childControllers: ControllerInitializerAny[] = [];
     if (!RECORDING_V2_FLAG.get()) {
-      childControllers.push(Child(
-          'record', RecordController, {extensionPort: this.extensionPort}));
-    }
-    if (globals.state.engine !== undefined) {
-      const engineCfg = globals.state.engine;
-      childControllers.push(Child(engineCfg.id, TraceController, engineCfg.id));
+      childControllers.push(
+        Child('record', RecordController, {extensionPort: this.extensionPort}),
+      );
     }
     return childControllers;
   }

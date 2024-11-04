@@ -12,32 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import {hex} from 'color-convert';
 import m from 'mithril';
-
-import {getScrollbarWidth} from '../base/dom_utils';
+import {removeFalsyValues} from '../base/array_utils';
+import {canvasClip, canvasSave} from '../base/canvas_utils';
+import {findRef, toHTMLElement} from '../base/dom_utils';
+import {Size2D} from '../base/geom';
+import {assertExists} from '../base/logging';
 import {clamp} from '../base/math_utils';
-import {Time} from '../base/time';
-import {Actions} from '../common/actions';
+import {Time, TimeSpan} from '../base/time';
+import {TimeScale} from '../base/time_scale';
 import {featureFlags} from '../core/feature_flags';
 import {raf} from '../core/raf_scheduler';
-import {Track, TrackTags} from '../public';
-
-import {TRACK_SHELL_WIDTH} from './css_constants';
-import {DetailsPanel} from './details_panel';
+import {TrackNode} from '../public/workspace';
+import {EmptyState} from '../widgets/empty_state';
+import {TRACK_BORDER_COLOR, TRACK_SHELL_WIDTH} from './css_constants';
+import {renderFlows} from './flow_events_renderer';
 import {globals} from './globals';
+import {generateTicks, getMaxMajorTicks, TickType} from './gridline_helper';
 import {NotesPanel} from './notes_panel';
 import {OverviewTimelinePanel} from './overview_timeline_panel';
-import {createPage} from './pages';
 import {PanAndZoomHandler} from './pan_and_zoom_handler';
-import {Panel, PanelContainer, PanelOrGroup} from './panel_container';
+import {
+  PanelContainer,
+  PanelOrGroup,
+  RenderedPanelInfo,
+} from './panel_container';
 import {publishShowPanningHint} from './publish';
+import {TabPanel} from './tab_panel';
 import {TickmarkPanel} from './tickmark_panel';
 import {TimeAxisPanel} from './time_axis_panel';
 import {TimeSelectionPanel} from './time_selection_panel';
 import {DISMISSED_PANNING_HINT_KEY} from './topbar';
-import {TrackGroupPanel} from './track_group_panel';
 import {TrackPanel} from './track_panel';
-import {TrackCache} from '../common/track_cache';
+import {drawVerticalLineAtTime} from './vertical_line_helper';
+import {PageWithTraceAttrs} from './pages';
 
 const OVERVIEW_PANEL_FLAG = featureFlags.register({
   id: 'overviewVisible',
@@ -48,17 +57,19 @@ const OVERVIEW_PANEL_FLAG = featureFlags.register({
 
 // Checks if the mousePos is within 3px of the start or end of the
 // current selected time range.
-function onTimeRangeBoundary(mousePos: number): 'START'|'END'|null {
-  const selection = globals.state.currentSelection;
-  if (selection !== null && selection.kind === 'AREA') {
+function onTimeRangeBoundary(
+  timescale: TimeScale,
+  mousePos: number,
+): 'START' | 'END' | null {
+  const selection = globals.selectionManager.selection;
+  if (selection.kind === 'area') {
     // If frontend selectedArea exists then we are in the process of editing the
     // time range and need to use that value instead.
-    const area = globals.timeline.selectedArea ?
-        globals.timeline.selectedArea :
-        globals.state.areas[selection.areaId];
-    const {visibleTimeScale} = globals.timeline;
-    const start = visibleTimeScale.timeToPx(area.start);
-    const end = visibleTimeScale.timeToPx(area.end);
+    const area = globals.timeline.selectedArea
+      ? globals.timeline.selectedArea
+      : selection;
+    const start = timescale.timeToPx(area.start);
+    const end = timescale.timeToPx(area.end);
     const startDrag = mousePos - TRACK_SHELL_WIDTH;
     const startDistance = Math.abs(start - startDrag);
     const endDistance = Math.abs(end - startDrag);
@@ -75,51 +86,42 @@ function onTimeRangeBoundary(mousePos: number): 'START'|'END'|null {
  * Top-most level component for the viewer page. Holds tracks, brush timeline,
  * panels, and everything else that's part of the main trace viewer page.
  */
-class TraceViewer implements m.ClassComponent {
-  private onResize: () => void = () => {};
+export class ViewerPage implements m.ClassComponent<PageWithTraceAttrs> {
   private zoomContent?: PanAndZoomHandler;
   // Used to prevent global deselection if a pan/drag select occurred.
   private keepCurrentSelection = false;
 
-  readonly trackCache = new TrackCache();
+  private overviewTimelinePanel: OverviewTimelinePanel;
+  private timeAxisPanel = new TimeAxisPanel();
+  private timeSelectionPanel = new TimeSelectionPanel();
+  private notesPanel = new NotesPanel();
+  private tickmarkPanel: TickmarkPanel;
+  private timelineWidthPx?: number;
 
-  private overviewTimelinePanel = new OverviewTimelinePanel('overview');
-  private timeAxisPanel = new TimeAxisPanel('timeaxis');
-  private timeSelectionPanel = new TimeSelectionPanel('timeselection');
-  private notesPanel = new NotesPanel('notes');
-  private tickmarkPanel = new TickmarkPanel('searchTickmarks');
+  private readonly PAN_ZOOM_CONTENT_REF = 'pan-and-zoom-content';
 
-  oncreate(vnode: m.CVnodeDOM) {
-    const timeline = globals.timeline;
-    const updateDimensions = () => {
-      const rect = vnode.dom.getBoundingClientRect();
-      timeline.updateLocalLimits(
-          0, rect.width - TRACK_SHELL_WIDTH - getScrollbarWidth());
-    };
+  constructor(vnode: m.CVnode<PageWithTraceAttrs>) {
+    this.tickmarkPanel = new TickmarkPanel(vnode.attrs.trace);
+    this.overviewTimelinePanel = new OverviewTimelinePanel(vnode.attrs.trace);
+  }
 
-    updateDimensions();
-
-    // TODO: Do resize handling better.
-    this.onResize = () => {
-      updateDimensions();
-      raf.scheduleFullRedraw();
-    };
-
-    // Once ResizeObservers are out, we can stop accessing the window here.
-    window.addEventListener('resize', this.onResize);
-
-    const panZoomEl =
-        vnode.dom.querySelector('.pan-and-zoom-content') as HTMLElement;
+  oncreate(vnode: m.CVnodeDOM<PageWithTraceAttrs>) {
+    const panZoomElRaw = findRef(vnode.dom, this.PAN_ZOOM_CONTENT_REF);
+    const panZoomEl = toHTMLElement(assertExists(panZoomElRaw));
 
     this.zoomContent = new PanAndZoomHandler({
       element: panZoomEl,
       onPanned: (pannedPx: number) => {
-        const {
-          visibleTimeScale,
-        } = globals.timeline;
+        const timeline = globals.timeline;
+
+        if (this.timelineWidthPx === undefined) return;
 
         this.keepCurrentSelection = true;
-        const tDelta = visibleTimeScale.pxDeltaToDuration(pannedPx);
+        const timescale = new TimeScale(timeline.visibleWindow, {
+          left: 0,
+          right: this.timelineWidthPx,
+        });
+        const tDelta = timescale.pxToDuration(pannedPx);
         timeline.panVisibleWindow(tDelta);
 
         // If the user has panned they no longer need the hint.
@@ -127,6 +129,7 @@ class TraceViewer implements m.ClassComponent {
         raf.scheduleRedraw();
       },
       onZoomed: (zoomedPositionPx: number, zoomRatio: number) => {
+        const timeline = globals.timeline;
         // TODO(hjd): Avoid hardcoding TRACK_SHELL_WIDTH.
         // TODO(hjd): Improve support for zooming in overview timeline.
         const zoomPx = zoomedPositionPx - TRACK_SHELL_WIDTH;
@@ -136,56 +139,73 @@ class TraceViewer implements m.ClassComponent {
         raf.scheduleRedraw();
       },
       editSelection: (currentPx: number) => {
-        return onTimeRangeBoundary(currentPx) !== null;
+        if (this.timelineWidthPx === undefined) return false;
+        const timescale = new TimeScale(globals.timeline.visibleWindow, {
+          left: 0,
+          right: this.timelineWidthPx,
+        });
+        return onTimeRangeBoundary(timescale, currentPx) !== null;
       },
       onSelection: (
-          dragStartX: number,
-          dragStartY: number,
-          prevX: number,
-          currentX: number,
-          currentY: number,
-          editing: boolean) => {
-        const traceTime = globals.state.traceTime;
-        const {visibleTimeScale} = timeline;
+        dragStartX: number,
+        dragStartY: number,
+        prevX: number,
+        currentX: number,
+        currentY: number,
+        editing: boolean,
+      ) => {
+        const traceTime = globals.traceContext;
+        const timeline = globals.timeline;
+
+        if (this.timelineWidthPx === undefined) return;
+
+        // TODO(stevegolton): Don't get the windowSpan from globals, get it from
+        // here!
+        const {visibleWindow} = timeline;
+        const timespan = visibleWindow.toTimeSpan();
         this.keepCurrentSelection = true;
+
+        const timescale = new TimeScale(timeline.visibleWindow, {
+          left: 0,
+          right: this.timelineWidthPx,
+        });
+
         if (editing) {
-          const selection = globals.state.currentSelection;
-          if (selection !== null && selection.kind === 'AREA') {
-            const area = globals.timeline.selectedArea ?
-                globals.timeline.selectedArea :
-                globals.state.areas[selection.areaId];
-            let newTime =
-                visibleTimeScale.pxToHpTime(currentX - TRACK_SHELL_WIDTH)
-                    .toTime();
+          const selection = globals.selectionManager.selection;
+          if (selection.kind === 'area') {
+            const area = globals.timeline.selectedArea
+              ? globals.timeline.selectedArea
+              : selection;
+            let newTime = timescale
+              .pxToHpTime(currentX - TRACK_SHELL_WIDTH)
+              .toTime();
             // Have to check again for when one boundary crosses over the other.
-            const curBoundary = onTimeRangeBoundary(prevX);
+            const curBoundary = onTimeRangeBoundary(timescale, prevX);
             if (curBoundary == null) return;
             const keepTime = curBoundary === 'START' ? area.end : area.start;
             // Don't drag selection outside of current screen.
             if (newTime < keepTime) {
-              newTime =
-                  Time.max(newTime, visibleTimeScale.timeSpan.start.toTime());
+              newTime = Time.max(newTime, timespan.start);
             } else {
-              newTime =
-                  Time.max(newTime, visibleTimeScale.timeSpan.end.toTime());
+              newTime = Time.min(newTime, timespan.end);
             }
             // When editing the time range we always use the saved tracks,
             // since these will not change.
             timeline.selectArea(
-                Time.max(Time.min(keepTime, newTime), traceTime.start),
-                Time.min(Time.max(keepTime, newTime), traceTime.end),
-                globals.state.areas[selection.areaId].tracks);
+              Time.max(Time.min(keepTime, newTime), traceTime.start),
+              Time.min(Time.max(keepTime, newTime), traceTime.end),
+              selection.trackUris,
+            );
           }
         } else {
           let startPx = Math.min(dragStartX, currentX) - TRACK_SHELL_WIDTH;
           let endPx = Math.max(dragStartX, currentX) - TRACK_SHELL_WIDTH;
           if (startPx < 0 && endPx < 0) return;
-          const {pxSpan} = visibleTimeScale;
-          startPx = clamp(startPx, pxSpan.start, pxSpan.end);
-          endPx = clamp(endPx, pxSpan.start, pxSpan.end);
+          startPx = clamp(startPx, 0, this.timelineWidthPx);
+          endPx = clamp(endPx, 0, this.timelineWidthPx);
           timeline.selectArea(
-              visibleTimeScale.pxToHpTime(startPx).toTime('floor'),
-              visibleTimeScale.pxToHpTime(endPx).toTime('ceil'),
+            timescale.pxToHpTime(startPx).toTime('floor'),
+            timescale.pxToHpTime(endPx).toTime('ceil'),
           );
           timeline.areaY.start = dragStartY;
           timeline.areaY.end = currentY;
@@ -200,13 +220,12 @@ class TraceViewer implements m.ClassComponent {
         // If we are editing we need to pass the current id through to ensure
         // the marked area with that id is also updated.
         if (edit) {
-          const selection = globals.state.currentSelection;
-          if (selection !== null && selection.kind === 'AREA' && area) {
-            globals.dispatch(
-                Actions.editArea({area, areaId: selection.areaId}));
+          const selection = globals.selectionManager.selection;
+          if (selection.kind === 'area' && area) {
+            globals.selectionManager.selectArea({...area});
           }
         } else if (area) {
-          globals.makeSelection(Actions.selectArea({area}));
+          globals.selectionManager.selectArea({...area});
         }
         // Now the selection has ended we stored the final selected area in the
         // global state and can remove the in progress selection from the
@@ -219,142 +238,307 @@ class TraceViewer implements m.ClassComponent {
   }
 
   onremove() {
-    window.removeEventListener('resize', this.onResize);
-    if (this.zoomContent) this.zoomContent.dispose();
+    if (this.zoomContent) this.zoomContent[Symbol.dispose]();
   }
 
   view() {
-    const scrollingPanels: PanelOrGroup[] =
-        globals.state.scrollingTracks.map((key) => {
-          const trackBundle = this.resolveTrack(key);
-          return new TrackPanel({
-            key,
-            trackKey: key,
-            title: trackBundle.title,
-            tags: trackBundle.tags,
-            track: trackBundle.track,
-          });
-        });
-
-    for (const group of Object.values(globals.state.trackGroups)) {
-      const key = group.tracks[0];
-      const trackBundle = this.resolveTrack(key);
-      const headerPanel = new TrackGroupPanel({
-        trackGroupId: group.id,
-        key: `trackgroup-${group.id}`,
-        track: trackBundle.track,
-        labels: trackBundle.labels,
-        tags: trackBundle.tags,
-        collapsed: group.collapsed,
-        title: group.name,
-      });
-
-      const childTracks: Panel[] = [];
-      // The first track is the summary track, and is displayed as part of the
-      // group panel, we don't want to display it twice so we start from 1.
-      if (!group.collapsed) {
-        for (let i = 1; i < group.tracks.length; ++i) {
-          const key = group.tracks[i];
-          const trackBundle = this.resolveTrack(key);
-          const panel = new TrackPanel({
-            key: `track-${group.id}-${key}`,
-            trackKey: key,
-            title: trackBundle.title,
-            tags: trackBundle.tags,
-            track: trackBundle.track,
-          });
-          childTracks.push(panel);
-        }
-      }
-
-      scrollingPanels.push({
-        kind: 'group',
-        collapsed: group.collapsed,
-        childTracks,
-        header: headerPanel,
-        trackGroupId: group.id,
-      });
-    }
-
-    const overviewPanel = [];
-    if (OVERVIEW_PANEL_FLAG.get()) {
-      overviewPanel.push(this.overviewTimelinePanel);
-    }
+    const scrollingPanels = renderToplevelPanels();
 
     const result = m(
-        '.page',
-        m('.split-panel',
-          m('.pan-and-zoom-content',
-            {
-              onclick: () => {
-                // We don't want to deselect when panning/drag selecting.
-                if (this.keepCurrentSelection) {
-                  this.keepCurrentSelection = false;
-                  return;
-                }
-                globals.makeSelection(Actions.deselect({}));
+      '.page.viewer-page',
+      m(
+        '.pan-and-zoom-content',
+        {
+          ref: this.PAN_ZOOM_CONTENT_REF,
+          onclick: () => {
+            // We don't want to deselect when panning/drag selecting.
+            if (this.keepCurrentSelection) {
+              this.keepCurrentSelection = false;
+              return;
+            }
+            globals.selectionManager.clear();
+          },
+        },
+        m(
+          '.pf-timeline-header',
+          m(PanelContainer, {
+            className: 'header-panel-container',
+            panels: removeFalsyValues([
+              OVERVIEW_PANEL_FLAG.get() && this.overviewTimelinePanel,
+              this.timeAxisPanel,
+              this.timeSelectionPanel,
+              this.notesPanel,
+              this.tickmarkPanel,
+            ]),
+          }),
+          m('.scrollbar-spacer-vertical'),
+        ),
+        m(PanelContainer, {
+          className: 'pinned-panel-container',
+          panels: globals.workspace.pinnedTracks.map((trackNode) => {
+            if (trackNode.uri) {
+              const tr = globals.trackManager.getTrackRenderer(trackNode.uri);
+              return new TrackPanel({
+                reorderable: true,
+                node: trackNode,
+                trackRenderer: tr,
+                revealOnCreate: true,
+                indentationLevel: 0,
+                topOffsetPx: 0,
+              });
+            } else {
+              return new TrackPanel({
+                node: trackNode,
+                revealOnCreate: true,
+                indentationLevel: 0,
+                topOffsetPx: 0,
+              });
+            }
+          }),
+          renderUnderlay,
+          renderOverlay,
+        }),
+        scrollingPanels.length === 0 &&
+          filterTermIsValid(globals.state.trackFilterTerm)
+          ? m(
+              EmptyState,
+              {title: 'No matching tracks'},
+              `No tracks match filter term "${globals.state.trackFilterTerm}"`,
+            )
+          : m(PanelContainer, {
+              className: 'scrolling-panel-container',
+              panels: scrollingPanels,
+              onPanelStackResize: (width) => {
+                const timelineWidth = width - TRACK_SHELL_WIDTH;
+                this.timelineWidthPx = timelineWidth;
               },
-            },
-            m('.pinned-panel-container', m(PanelContainer, {
-                doesScroll: false,
-                panels: [
-                  ...overviewPanel,
-                  this.timeAxisPanel,
-                  this.timeSelectionPanel,
-                  this.notesPanel,
-                  this.tickmarkPanel,
-                  ...globals.state.pinnedTracks.map((key) => {
-                    const trackBundle = this.resolveTrack(key);
-                    return new TrackPanel({
-                      key,
-                      trackKey: key,
-                      title: trackBundle.title,
-                      tags: trackBundle.tags,
-                      track: trackBundle.track,
-                    });
-                  }),
-                ],
-                kind: 'OVERVIEW',
-              })),
-            m('.scrolling-panel-container', m(PanelContainer, {
-                doesScroll: true,
-                panels: scrollingPanels,
-                kind: 'TRACKS',
-              })))),
-        m(DetailsPanel));
+              renderUnderlay,
+              renderOverlay,
+            }),
+      ),
+      m(TabPanel),
+    );
 
-    this.trackCache.flushOldTracks();
+    globals.trackManager.flushOldTracks();
     return result;
   }
+}
 
-  // Resolve a track and its metadata through the track cache
-  private resolveTrack(key: string): TrackBundle {
-    const trackState = globals.state.tracks[key];
-    const {uri, params, name, labels} = trackState;
-    const trackMeta = this.trackCache.resolveTrack(key, uri, params);
-    const track = trackMeta?.track;
-    const tags = trackMeta?.desc.tags;
-    const trackIds = trackMeta?.desc.trackIds;
-    return {
-      title: name,
-      tags,
-      track,
-      labels,
-      trackIds,
-    };
+function renderUnderlay(
+  ctx: CanvasRenderingContext2D,
+  canvasSize: Size2D,
+): void {
+  const size = {
+    width: canvasSize.width - TRACK_SHELL_WIDTH,
+    height: canvasSize.height,
+  };
+
+  using _ = canvasSave(ctx);
+  ctx.translate(TRACK_SHELL_WIDTH, 0);
+
+  const timewindow = globals.timeline.visibleWindow;
+  const timescale = new TimeScale(timewindow, {left: 0, right: size.width});
+
+  // Just render the gridlines - these should appear underneath all tracks
+  drawGridLines(ctx, timewindow.toTimeSpan(), timescale, size);
+}
+
+function renderOverlay(
+  ctx: CanvasRenderingContext2D,
+  canvasSize: Size2D,
+  panels: ReadonlyArray<RenderedPanelInfo>,
+): void {
+  const size = {
+    width: canvasSize.width - TRACK_SHELL_WIDTH,
+    height: canvasSize.height,
+  };
+
+  using _ = canvasSave(ctx);
+  ctx.translate(TRACK_SHELL_WIDTH, 0);
+  canvasClip(ctx, 0, 0, size.width, size.height);
+
+  // TODO(primiano): plumb the TraceImpl obj throughout the viwer page.
+  renderFlows(globals.trace, ctx, size, panels);
+
+  const timewindow = globals.timeline.visibleWindow;
+  const timescale = new TimeScale(timewindow, {left: 0, right: size.width});
+
+  renderHoveredNoteVertical(ctx, timescale, size);
+  renderHoveredCursorVertical(ctx, timescale, size);
+  renderWakeupVertical(ctx, timescale, size);
+  renderNoteVerticals(ctx, timescale, size);
+}
+
+function filterTermIsValid(
+  filterTerm: undefined | string,
+): filterTerm is string {
+  // Note: Boolean(filterTerm) returns the same result, but this is clearer
+  return filterTerm !== undefined && filterTerm !== '';
+}
+
+// Render the toplevel "scrolling" tracks and track groups
+function renderToplevelPanels(): PanelOrGroup[] {
+  return renderNodes(globals.workspace.children, 0, 0);
+}
+
+// Given a list of tracks and a filter term, return a list pf panels filtered by
+// the filter term
+function renderNodes(
+  nodes: ReadonlyArray<TrackNode>,
+  indent: number,
+  topOffsetPx: number,
+): PanelOrGroup[] {
+  return nodes.flatMap((node) => {
+    if (node.headless) {
+      // Render children as if this node doesn't exist
+      return renderNodes(node.children, indent, topOffsetPx);
+    } else if (node.children.length === 0) {
+      return renderTrackPanel(node, indent, topOffsetPx);
+    } else {
+      const headerPanel = renderTrackPanel(node, indent, topOffsetPx);
+      const isSticky = node.isSummary;
+      const nextTopOffsetPx = isSticky
+        ? topOffsetPx + headerPanel.heightPx ?? 0
+        : topOffsetPx;
+      return {
+        kind: 'group',
+        collapsed: node.collapsed,
+        header: headerPanel,
+        sticky: isSticky, // && node.collapsed??
+        topOffsetPx,
+        childPanels: node.collapsed
+          ? []
+          : renderNodes(node.children, indent + 1, nextTopOffsetPx),
+      };
+    }
+  });
+}
+
+function renderTrackPanel(
+  trackNode: TrackNode,
+  indent: number,
+  topOffsetPx: number,
+) {
+  let tr = undefined;
+  if (trackNode.uri) {
+    tr = globals.trackManager.getTrackRenderer(trackNode.uri);
+  }
+  return new TrackPanel({
+    node: trackNode,
+    trackRenderer: tr,
+    indentationLevel: indent,
+    topOffsetPx,
+  });
+}
+
+export function drawGridLines(
+  ctx: CanvasRenderingContext2D,
+  timespan: TimeSpan,
+  timescale: TimeScale,
+  size: Size2D,
+): void {
+  ctx.strokeStyle = TRACK_BORDER_COLOR;
+  ctx.lineWidth = 1;
+
+  if (size.width > 0 && timespan.duration > 0n) {
+    const maxMajorTicks = getMaxMajorTicks(size.width);
+    const offset = globals.trace.timeline.timestampOffset();
+    for (const {type, time} of generateTicks(timespan, maxMajorTicks, offset)) {
+      const px = Math.floor(timescale.timeToPx(time));
+      if (type === TickType.MAJOR) {
+        ctx.beginPath();
+        ctx.moveTo(px + 0.5, 0);
+        ctx.lineTo(px + 0.5, size.height);
+        ctx.stroke();
+      }
+    }
   }
 }
 
-interface TrackBundle {
-  title: string;
-  track?: Track;
-  tags?: TrackTags;
-  labels?: string[];
-  trackIds?: number[];
+export function renderHoveredCursorVertical(
+  ctx: CanvasRenderingContext2D,
+  timescale: TimeScale,
+  size: Size2D,
+) {
+  if (globals.trace.timeline.hoverCursorTimestamp !== undefined) {
+    drawVerticalLineAtTime(
+      ctx,
+      timescale,
+      globals.trace.timeline.hoverCursorTimestamp,
+      size.height,
+      `#344596`,
+    );
+  }
 }
 
-export const ViewerPage = createPage({
-  view() {
-    return m(TraceViewer);
-  },
-});
+export function renderHoveredNoteVertical(
+  ctx: CanvasRenderingContext2D,
+  timescale: TimeScale,
+  size: Size2D,
+) {
+  if (globals.state.hoveredNoteTimestamp !== -1n) {
+    drawVerticalLineAtTime(
+      ctx,
+      timescale,
+      globals.state.hoveredNoteTimestamp,
+      size.height,
+      `#aaa`,
+    );
+  }
+}
+
+export function renderWakeupVertical(
+  ctx: CanvasRenderingContext2D,
+  timescale: TimeScale,
+  size: Size2D,
+) {
+  const selection = globals.selectionManager.selection;
+  if (selection.kind === 'track_event' && selection.wakeupTs) {
+    drawVerticalLineAtTime(
+      ctx,
+      timescale,
+      selection.wakeupTs,
+      size.height,
+      `black`,
+    );
+  }
+}
+
+export function renderNoteVerticals(
+  ctx: CanvasRenderingContext2D,
+  timescale: TimeScale,
+  size: Size2D,
+) {
+  // All marked areas should have semi-transparent vertical lines
+  // marking the start and end.
+  for (const note of globals.noteManager.notes.values()) {
+    if (note.noteType === 'SPAN') {
+      const transparentNoteColor =
+        'rgba(' + hex.rgb(note.color.substr(1)).toString() + ', 0.65)';
+      drawVerticalLineAtTime(
+        ctx,
+        timescale,
+        note.start,
+        size.height,
+        transparentNoteColor,
+        1,
+      );
+      drawVerticalLineAtTime(
+        ctx,
+        timescale,
+        note.end,
+        size.height,
+        transparentNoteColor,
+        1,
+      );
+    } else if (note.noteType === 'DEFAULT') {
+      drawVerticalLineAtTime(
+        ctx,
+        timescale,
+        note.timestamp,
+        size.height,
+        note.color,
+      );
+    }
+  }
+}

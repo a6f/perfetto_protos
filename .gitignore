@@ -6,6 +6,7 @@
 .cproject
 .deps_sha1
 .DS_Store
+.env
 .eslintcache
 .gclient*
 .gm-actuals
@@ -20,6 +21,7 @@
 *.pyc
 *.sock
 *.swp
+/*.pftrace
 /bazel-*
 /compile_commands.json
 /fuzz_out/
@@ -27,11 +29,11 @@
 /target
 /ui/dist
 /venv/*
-perf.data*
-TAGS
-/*.pftrace
+depot_tools/
 examples/sdk/build/
 Cargo.lock
 GPATH
 GRTAGS
 GTAGS
+perf.data*
+TAGS

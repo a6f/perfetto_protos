@@ -68,7 +68,7 @@ TracingSession TracingSession::Builder::Build() {
 
       perfetto_protos_DataSourceConfig_set_cstr_name(&ds_cfg,
                                                      data_source_name_.c_str());
-      if (!enabled_categories_.empty() && !disabled_categories_.empty()) {
+      if (!enabled_categories_.empty() || !disabled_categories_.empty()) {
         perfetto_protos_TrackEventConfig te_cfg;
         perfetto_protos_DataSourceConfig_begin_track_event_config(&ds_cfg,
                                                                   &te_cfg);
@@ -157,6 +157,10 @@ bool TracingSession::FlushBlocking(uint32_t timeout_ms) {
 
 void TracingSession::WaitForStopped() {
   stopped_->WaitForNotification();
+}
+
+void TracingSession::StopAsync() {
+  PerfettoTracingSessionStopAsync(session_);
 }
 
 void TracingSession::StopBlocking() {

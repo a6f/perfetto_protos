@@ -19,9 +19,11 @@
 
 #include <stdint.h>
 
+#include <cstdint>
 #include <unordered_map>
 
 #include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/tables/profiler_tables_py.h"
 
 namespace perfetto {
 namespace protos {
@@ -35,12 +37,16 @@ class TraceProcessorContext;
 class PerfSampleTracker {
  public:
   struct SamplingStreamInfo {
-    uint32_t perf_session_id = 0;
+    tables::PerfSessionTable::Id perf_session_id;
     TrackId timebase_track_id = kInvalidTrackId;
+    std::vector<TrackId> follower_track_ids;
 
-    SamplingStreamInfo(uint32_t _perf_session_id, TrackId _timebase_track_id)
+    SamplingStreamInfo(tables::PerfSessionTable::Id _perf_session_id,
+                       TrackId _timebase_track_id,
+                       std::vector<TrackId> _follower_track_ids)
         : perf_session_id(_perf_session_id),
-          timebase_track_id(_timebase_track_id) {}
+          timebase_track_id(_timebase_track_id),
+          follower_track_ids(std::move(_follower_track_ids)) {}
   };
 
   explicit PerfSampleTracker(TraceProcessorContext* context)
@@ -54,21 +60,25 @@ class PerfSampleTracker {
  private:
   struct CpuSequenceState {
     TrackId timebase_track_id = kInvalidTrackId;
+    std::vector<TrackId> follower_track_ids;
 
-    CpuSequenceState(TrackId _timebase_track_id)
-        : timebase_track_id(_timebase_track_id) {}
+    CpuSequenceState(TrackId _timebase_track_id,
+                     std::vector<TrackId> _follower_track_ids)
+        : timebase_track_id(_timebase_track_id),
+          follower_track_ids(std::move(_follower_track_ids)) {}
   };
 
   struct SequenceState {
-    uint32_t perf_session_id = 0;
+    tables::PerfSessionTable::Id perf_session_id;
     std::unordered_map<uint32_t, CpuSequenceState> per_cpu;
 
-    SequenceState(uint32_t _perf_session_id)
+    explicit SequenceState(tables::PerfSessionTable::Id _perf_session_id)
         : perf_session_id(_perf_session_id) {}
   };
 
+  tables::PerfSessionTable::Id CreatePerfSession();
+
   std::unordered_map<uint32_t, SequenceState> seq_state_;
-  uint32_t next_perf_session_id_ = 0;
 
   TraceProcessorContext* const context_;
 };

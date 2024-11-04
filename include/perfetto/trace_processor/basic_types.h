@@ -17,22 +17,20 @@
 #ifndef INCLUDE_PERFETTO_TRACE_PROCESSOR_BASIC_TYPES_H_
 #define INCLUDE_PERFETTO_TRACE_PROCESSOR_BASIC_TYPES_H_
 
-#include <assert.h>
-#include <math.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <functional>
+#include <cassert>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdint>
+
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
-#include "perfetto/base/build_config.h"
 #include "perfetto/base/export.h"
 #include "perfetto/base/logging.h"
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 // All metrics protos are in this directory. When loading metric extensions, the
 // protos are mounted onto a virtual path inside this directory.
@@ -57,21 +55,6 @@ enum class SortingMode {
   // heuristics trace processor would normally use to ingest partially sorted
   // data to be skipped.
   kForceFullSort = 1,
-
-  // This option is deprecated in v18; trace processor will ignore it and
-  // use |kDefaultHeuristics|.
-  //
-  // Rationale for deprecation:
-  // The new windowed sorting logic in trace processor uses a combination of
-  // flush and buffer-read lifecycle events inside the trace instead of
-  // using time-periods from the config.
-  //
-  // Recommended migration:
-  // Users of this option should switch to using |kDefaultHeuristics| which
-  // will act very similarly to the pre-v20 behaviour of this option.
-  //
-  // This option is scheduled to be removed in v21.
-  kForceFlushPeriodWindowedSort = 2
 };
 
 // Enum which encodes which event (if any) should be used to drop ftrace data
@@ -94,7 +77,25 @@ enum class DropFtraceDataBefore {
   // trace, no data is dropped.
   // This option can be used in cases where R- traces are being considered and
   // |kTracingStart| cannot be used because the event was not present.
-  kAllDataSourcesStarted = 2,
+  kAllDataSourcesStarted = 2
+};
+
+// Specifies whether the ftrace data should be "soft-dropped" until a given
+// global timestamp, meaning we'll still populate the |ftrace_events| table
+// and some other internal storage, but won't persist derived info such as
+// slices. See also |DropFtraceDataBefore| above.
+// Note: this might behave in surprising ways for traces using >1 tracefs
+// instances, but those aren't seen in practice at the time of writing.
+enum class SoftDropFtraceDataBefore {
+  // Drop until the earliest timestamp covered by all per-cpu event bundles.
+  // In other words, the maximum of all per-cpu "valid from" timestamps.
+  // Important for correct parsing of traces where the ftrace data is written
+  // into a central perfetto buffer in ring-buffer mode (as opposed to discard
+  // mode).
+  kAllPerCpuBuffersValid = 0,
+
+  // Keep all events (though DropFtraceDataBefore still applies).
+  kNoDrop = 1
 };
 
 // Enum which encodes which timestamp source (if any) should be used to drop
@@ -126,9 +127,14 @@ struct PERFETTO_EXPORT_COMPONENT Config {
   bool ingest_ftrace_in_raw_table = true;
 
   // Indicates the event which should be used as a marker to drop ftrace data in
-  // the trace before that event. See the ennu documenetation for more details.
+  // the trace before that event. See the enum documentation for more details.
   DropFtraceDataBefore drop_ftrace_data_before =
       DropFtraceDataBefore::kTracingStarted;
+
+  // Specifies whether the ftrace data should be "soft-dropped" until a given
+  // global timestamp.
+  SoftDropFtraceDataBefore soft_drop_ftrace_data_before =
+      SoftDropFtraceDataBefore::kAllPerCpuBuffersValid;
 
   // Indicates the source of timestamp before which track events should be
   // dropped. See the enum documentation for more details.
@@ -158,6 +164,10 @@ struct PERFETTO_EXPORT_COMPONENT Config {
   // Sets developer-only flags to the provided values. Does not have any affect
   // unless |enable_dev_features| = true.
   std::unordered_map<std::string, std::string> dev_flags;
+
+  // When set to true, trace processor will perform additional runtime checks
+  // to catch additional classes of SQL errors.
+  bool enable_extra_checks = false;
 };
 
 // Represents a dynamically typed value returned by SQL.
@@ -236,28 +246,38 @@ struct PERFETTO_EXPORT_COMPONENT SqlValue {
   Type type = kNull;
 };
 
-// Data used to register a new SQL module.
-struct SqlModule {
-  // Must be unique among modules, or can be used to override existing module if
-  // |allow_module_override| is set.
+// Data used to register a new SQL package.
+struct SqlPackage {
+  // Must be unique among package, or can be used to override existing package
+  // if |allow_override| is set.
   std::string name;
 
-  // Pairs of strings used for |IMPORT| with the contents of SQL files being
-  // run. Strings should only contain alphanumeric characters and '.', where
-  // string before the first dot has to be module name.
+  // Pairs of strings mapping from the name of the module used by `INCLUDE
+  // PERFETTO MODULE` statements to the contents of SQL files being executed.
+  // Module names should only contain alphanumeric characters and '.', where
+  // string before the first dot must be the package name.
   //
-  // It is encouraged that import key should be the path to the SQL file being
+  // It is encouraged that include key should be the path to the SQL file being
   // run, with slashes replaced by dots and without the SQL extension. For
-  // example, 'android/camera/junk.sql' would be imported by
-  // 'android.camera.junk'.
-  std::vector<std::pair<std::string, std::string>> files;
+  // example, 'android/camera/jank.sql' would be included by
+  // 'android.camera.jank'. This conforms to user expectations of how modules
+  // behave in other languages (e.g. Java, Python etc).
+  std::vector<std::pair<std::string, std::string>> modules;
 
-  // If true, SqlModule will override registered module with the same name. Can
-  // only be set if enable_dev_features is true, otherwise will throw an error.
+  // If true, will allow overriding a package which already exists with `name.
+  // Can only be set if enable_dev_features (in the TraceProcessorConfig object
+  // when creating TraceProcessor) is true. Otherwise, this option will throw an
+  // error.
+  bool allow_override = false;
+};
+
+// Deprecated. Please use `RegisterSqlPackage` and `SqlPackage` instead.
+struct SqlModule {
+  std::string name;
+  std::vector<std::pair<std::string, std::string>> files;
   bool allow_module_override = false;
 };
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor
 
 #endif  // INCLUDE_PERFETTO_TRACE_PROCESSOR_BASIC_TYPES_H_

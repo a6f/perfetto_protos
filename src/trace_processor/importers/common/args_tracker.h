@@ -17,6 +17,7 @@
 #ifndef SRC_TRACE_PROCESSOR_IMPORTERS_COMMON_ARGS_TRACKER_H_
 #define SRC_TRACE_PROCESSOR_IMPORTERS_COMMON_ARGS_TRACKER_H_
 
+#include <cstdint>
 #include "perfetto/ext/base/small_vector.h"
 #include "src/trace_processor/importers/common/global_args_tracker.h"
 #include "src/trace_processor/storage/trace_storage.h"
@@ -82,14 +83,14 @@ class ArgsTracker {
 
    protected:
     BoundInserter(ArgsTracker* args_tracker,
-                  Column* arg_set_id_column,
+                  ColumnLegacy* arg_set_id_column,
                   uint32_t row);
 
    private:
     friend class ArgsTracker;
 
     ArgsTracker* args_tracker_ = nullptr;
-    Column* arg_set_id_column_ = nullptr;
+    ColumnLegacy* arg_set_id_column_ = nullptr;
     uint32_t row_ = 0;
   };
 
@@ -119,6 +120,21 @@ class ArgsTracker {
     return AddArgsTo(context_->storage->mutable_flow_table(), id);
   }
 
+  BoundInserter AddArgsTo(tables::InputMethodClientsTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_inputmethod_clients_table(),
+                     id);
+  }
+
+  BoundInserter AddArgsTo(tables::InputMethodServiceTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_inputmethod_service_table(),
+                     id);
+  }
+
+  BoundInserter AddArgsTo(tables::InputMethodManagerServiceTable::Id id) {
+    return AddArgsTo(
+        context_->storage->mutable_inputmethod_manager_service_table(), id);
+  }
+
   BoundInserter AddArgsTo(tables::MemorySnapshotNodeTable::Id id) {
     return AddArgsTo(context_->storage->mutable_memory_snapshot_node_table(),
                      id);
@@ -139,21 +155,43 @@ class ArgsTracker {
         context_->storage->mutable_surfaceflinger_transactions_table(), id);
   }
 
+  BoundInserter AddArgsTo(tables::ViewCaptureTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_viewcapture_table(), id);
+  }
+
+  BoundInserter AddArgsTo(tables::WindowManagerTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_windowmanager_table(), id);
+  }
+
   BoundInserter AddArgsTo(tables::WindowManagerShellTransitionsTable::Id id) {
     return AddArgsTo(
         context_->storage->mutable_window_manager_shell_transitions_table(),
         id);
   }
 
+  BoundInserter AddArgsTo(tables::AndroidKeyEventsTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_android_key_events_table(), id);
+  }
+
+  BoundInserter AddArgsTo(tables::AndroidMotionEventsTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_android_motion_events_table(),
+                     id);
+  }
+
+  BoundInserter AddArgsTo(tables::AndroidInputEventDispatchTable::Id id) {
+    return AddArgsTo(
+        context_->storage->mutable_android_input_event_dispatch_table(), id);
+  }
+
   BoundInserter AddArgsTo(MetadataId id) {
     auto* table = context_->storage->mutable_metadata_table();
-    uint32_t row = *table->id().IndexOf(id);
+    uint32_t row = table->FindById(id)->ToRowNumber().row_number();
     return BoundInserter(this, table->mutable_int_value(), row);
   }
 
   BoundInserter AddArgsTo(TrackId id) {
     auto* table = context_->storage->mutable_track_table();
-    uint32_t row = *table->id().IndexOf(id);
+    uint32_t row = table->FindById(id)->ToRowNumber().row_number();
     return BoundInserter(this, table->mutable_source_arg_set_id(), row);
   }
 
@@ -173,6 +211,10 @@ class ArgsTracker {
                      id);
   }
 
+  BoundInserter AddArgsTo(tables::CpuTable::Id id) {
+    return AddArgsTo(context_->storage->mutable_cpu_table(), id);
+  }
+
   // Returns a CompactArgSet which contains the args inserted into this
   // ArgsTracker. Requires that every arg in this tracker was inserted for the
   // "arg_set_id" column given by |column| at the given |row_number|.
@@ -180,7 +222,8 @@ class ArgsTracker {
   // Note that this means the args stored in this tracker will *not* be flushed
   // into the tables: it is the callers responsibility to ensure this happens if
   // necessary.
-  CompactArgSet ToCompactArgSet(const Column& column, uint32_t row_number) &&;
+  CompactArgSet ToCompactArgSet(const ColumnLegacy& column,
+                                uint32_t row_number) &&;
 
   // Returns whether this ArgsTracker contains any arg which require translation
   // according to the provided |table|.
@@ -193,11 +236,11 @@ class ArgsTracker {
  private:
   template <typename Table>
   BoundInserter AddArgsTo(Table* table, typename Table::Id id) {
-    uint32_t row = *table->id().IndexOf(id);
+    uint32_t row = table->FindById(id)->ToRowNumber().row_number();
     return BoundInserter(this, table->mutable_arg_set_id(), row);
   }
 
-  void AddArg(Column* arg_set_id,
+  void AddArg(ColumnLegacy* arg_set_id,
               uint32_t row,
               StringId flat_key,
               StringId key,
@@ -207,8 +250,8 @@ class ArgsTracker {
   base::SmallVector<GlobalArgsTracker::Arg, 16> args_;
   TraceProcessorContext* context_ = nullptr;
 
-  using ArrayKeyTuple =
-      std::tuple<Column* /*arg_set_id*/, uint32_t /*row*/, StringId /*key*/>;
+  using ArrayKeyTuple = std::
+      tuple<ColumnLegacy* /*arg_set_id*/, uint32_t /*row*/, StringId /*key*/>;
   std::map<ArrayKeyTuple, size_t /*next_index*/> array_indexes_;
 };
 
