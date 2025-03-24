@@ -106,6 +106,9 @@ class TraceProcessorImpl : public TraceProcessor,
     return RegisterSqlPackage(package);
   }
 
+  base::Status RegisterFileContent(const std::string& path,
+                                   TraceBlobView content) override;
+
  private:
   // Needed for iterators to be able to access the context.
   friend class IteratorImpl;
@@ -119,6 +122,8 @@ class TraceProcessorImpl : public TraceProcessor,
   bool IsRootMetricField(const std::string& metric_name);
 
   void InitPerfettoSqlEngine();
+  void IncludeBeforeEofPrelude();
+  void IncludeAfterEofPrelude();
 
   const Config config_;
   std::unique_ptr<PerfettoSqlEngine> engine_;
@@ -138,8 +143,8 @@ class TraceProcessorImpl : public TraceProcessor,
   // to prevent single-flow compiler optimizations in ExecuteQuery().
   std::atomic<bool> query_interrupted_{false};
 
-  // Track the number of objects registered with SQLite after the constructor.
-  uint64_t sqlite_objects_post_constructor_initialization_ = 0;
+  // Track the number of objects registered with SQLite post prelude.
+  uint64_t sqlite_objects_post_prelude_ = 0;
 
   std::string current_trace_name_;
   uint64_t bytes_parsed_ = 0;

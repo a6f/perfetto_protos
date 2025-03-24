@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 import json
+import re
 from collections import defaultdict
 from typing import Dict
 
@@ -29,6 +30,13 @@ from python.generators.sql_processing.docs_parse import parse_file
 def _summary_desc(s: str) -> str:
   return s.split('. ')[0].replace('\n', ' ')
 
+def _long_type_to_table(s: str):
+    pattern = '(?:[A-Z]*)\(([a-z_]*).([a-z_]*)\)'
+    m = re.match(pattern, s)
+    if not m:
+      return (None, None)
+    g = m.groups()
+    return (g[0], g[1])
 
 def main():
   parser = argparse.ArgumentParser()
@@ -69,10 +77,10 @@ def main():
 
       sql_outputs[relpath] = f.read()
 
-  modules = defaultdict(list)
+  packages = defaultdict(list)
   # Add documentation from each file
   for path, sql in sql_outputs.items():
-    package = path.split("/")[0]
+    package_name = path.split("/")[0]
     module_name = path.split(".sql")[0].replace("/", ".")
 
     docs = parse_file(path, sql)
@@ -86,71 +94,91 @@ def main():
         print(e)
       return 1
 
-    file_dict = {
+    module_dict = {
         'module_name':
             module_name,
-        'tables/views': [{
-            'name': table.name,
-            'desc': table.desc,
-            'summary_desc': _summary_desc(table.desc),
-            'type': table.type,
-            'cols': {
-                col_name: {
-                    'type': col.type,
-                    'desc': col.description,
-                } for (col_name, col) in table.cols.items()
-            },
+        'data_objects': [{
+            'name':
+                table.name,
+            'desc':
+                table.desc,
+            'summary_desc':
+                _summary_desc(table.desc),
+            'type':
+                table.type,
+            'cols': [{
+                'name': col_name,
+                'type': col.long_type,
+                'desc': col.description,
+                'table': _long_type_to_table(col.long_type)[0],
+                'column': _long_type_to_table(col.long_type)[1],
+            } for (col_name, col) in table.cols.items()]
         } for table in docs.table_views],
         'functions': [{
             'name': function.name,
             'desc': function.desc,
             'summary_desc': _summary_desc(function.desc),
-            'args': {
-                arg_name: {
-                    'type': arg.type,
-                    'desc': arg.description,
-                } for (arg_name, arg) in function.args.items()
-            },
+            'args': [{
+                'name': arg_name,
+                'type': arg.long_type,
+                'desc': arg.description,
+                'table': _long_type_to_table(arg.long_type)[0],
+                'column': _long_type_to_table(arg.long_type)[1],
+            } for (arg_name, arg) in function.args.items()],
             'return_type': function.return_type,
             'return_desc': function.return_desc,
         } for function in docs.functions],
         'table_functions': [{
-            'name': function.name,
-            'desc': function.desc,
-            'summary_desc': _summary_desc(function.desc),
-            'args': {
-                arg_name: {
-                    'type': arg.type,
-                    'desc': arg.description,
-                } for (arg_name, arg) in function.args.items()
-            },
-            'cols': {
-                col_name: {
-                    'type': col.type,
-                    'desc': col.description,
-                } for (col_name, col) in function.cols.items()
-            },
+            'name':
+                function.name,
+            'desc':
+                function.desc,
+            'summary_desc':
+                _summary_desc(function.desc),
+            'args': [{
+                'name': arg_name,
+                'type': arg.long_type,
+                'desc': arg.description,
+                'table': _long_type_to_table(arg.long_type)[0],
+                'column': _long_type_to_table(arg.long_type)[1],
+            } for (arg_name, arg) in function.args.items()],
+            'cols': [{
+                'name': col_name,
+                'type': col.long_type,
+                'table': _long_type_to_table(col.long_type)[0],
+                'column': _long_type_to_table(col.long_type)[1],
+                'desc': col.description
+            } for (col_name, col) in function.cols.items()]
         } for function in docs.table_functions],
         'macros': [{
-            'name': macro.name,
-            'desc': macro.desc,
-            'summary_desc': _summary_desc(macro.desc),
-            'return_desc': macro.return_desc,
-            'return_type': macro.return_type,
-            'args': {
-                arg_name: {
-                    'type': arg.type,
-                    'desc': arg.description,
-                } for (arg_name, arg) in macro.args.items()
-            },
+            'name':
+                macro.name,
+            'desc':
+                macro.desc,
+            'summary_desc':
+                _summary_desc(macro.desc),
+            'return_desc':
+                macro.return_desc,
+            'return_type':
+                macro.return_type,
+            'args': [{
+                'name': arg_name,
+                'type': arg.long_type,
+                'desc': arg.description,
+                'table': _long_type_to_table(arg.long_type)[0],
+                'column': _long_type_to_table(arg.long_type)[1],
+            } for (arg_name, arg) in macro.args.items()],
         } for macro in docs.macros],
     }
-    modules[package].append(file_dict)
+    packages[package_name].append(module_dict)
 
-  indent = None if args.minify else 4
+  packages_list = [{
+      "name": name,
+      "modules": modules
+  } for name, modules in packages.items()]
 
   with open(args.json_out, 'w+') as f:
-    json.dump(modules, f, indent=indent)
+    json.dump(packages_list, f, indent=None if args.minify else 4)
 
   return 0
 

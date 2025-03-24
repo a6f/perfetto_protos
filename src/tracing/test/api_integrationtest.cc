@@ -217,6 +217,7 @@ using ::testing::HasSubstr;
 using ::testing::Invoke;
 using ::testing::InvokeWithoutArgs;
 using ::testing::IsEmpty;
+using ::testing::MockFunction;
 using ::testing::NiceMock;
 using ::testing::Not;
 using ::testing::Property;
@@ -243,6 +244,12 @@ class WaitableTestEvent {
   void Notify() {
     std::lock_guard<std::mutex> lock(mutex_);
     notified_ = true;
+    cv_.notify_one();
+  }
+
+  void Reset() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    notified_ = false;
     cv_.notify_one();
   }
 
@@ -398,7 +405,31 @@ class TestIncrementalDataSource
   void OnSetup(const SetupArgs&) override {}
   void OnStart(const StartArgs&) override {}
   void OnStop(const StopArgs&) override {}
+  void WillClearIncrementalState(
+      const ClearIncrementalStateArgs& args) override {
+    if (will_clear_incremental_state) {
+      (*will_clear_incremental_state)(args);
+    }
+  }
+
+  static void SetWillClearIncrementalStateCallback(
+      std::function<void(const DataSourceBase::ClearIncrementalStateArgs&)> cb) {
+    if (will_clear_incremental_state) {
+      delete will_clear_incremental_state;
+      will_clear_incremental_state = nullptr;
+    }
+    if (cb) {
+      will_clear_incremental_state = new decltype(cb)(cb);
+    }
+  }
+
+ private:
+  static std::function<void(const ClearIncrementalStateArgs&)>*
+      will_clear_incremental_state;
 };
+
+std::function<void(const perfetto::DataSourceBase::ClearIncrementalStateArgs&)>*
+    TestIncrementalDataSource::will_clear_incremental_state;
 
 // A convenience wrapper around TracingSession that allows to do block on
 //
@@ -1548,6 +1579,78 @@ TEST_P(PerfettoApiTest, ClearIncrementalState) {
       ClearDataSourceTlsStateOnReset<TestIncrementalDataSource>();
 }
 
+TEST_P(PerfettoApiTest, ClearIncrementalStateMultipleInstances) {
+  perfetto::DataSourceDescriptor dsd;
+  dsd.set_name("incr_data_source");
+  TestIncrementalDataSource::Register(dsd);
+  perfetto::test::SyncProducers();
+
+  // Setup the trace config with an incremental state clearing period.
+  perfetto::TraceConfig cfg;
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("incr_data_source");
+
+  WaitableTestEvent cleared;
+  NiceMock<MockFunction<void(const perfetto::DataSourceBase::ClearIncrementalStateArgs&)>> cb;
+  ON_CALL(cb, Call). WillByDefault([&]{
+    cleared.Notify();
+  });
+  TestIncrementalDataSource::SetWillClearIncrementalStateCallback(cb.AsStdFunction());
+  auto cleanup = MakeCleanup([&] {
+    TestIncrementalDataSource::SetWillClearIncrementalStateCallback({});
+  });
+
+  // Create a new trace session.
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  auto* is_cfg = cfg.mutable_incremental_state_config();
+  is_cfg->set_clear_period_ms(10);
+
+  // Create another tracing session that clear the incremental state
+  // periodically.
+  auto* tracing_session2 = NewTrace(cfg);
+  tracing_session2->get()->StartBlocking();
+
+  size_t count_instances = 0;
+  TestIncrementalDataSource::Trace(
+      [&](TestIncrementalDataSource::TraceContext ctx) {
+        count_instances++;
+        auto* incr_state = ctx.GetIncrementalState();
+        if (!incr_state->flag) {
+          incr_state->flag = true;
+        }
+      });
+  ASSERT_EQ(count_instances, 2u);
+
+  // Wait for two incremental state reset.
+  cleared.Reset();
+  cleared.Wait();
+  cleared.Reset();
+  cleared.Wait();
+
+  std::vector<bool> instances_incremental_states;
+  TestIncrementalDataSource::Trace(
+      [&](TestIncrementalDataSource::TraceContext ctx) {
+        auto* incr_state = ctx.GetIncrementalState();
+        instances_incremental_states.push_back(incr_state->flag);
+      });
+
+  // There are two instances.
+  EXPECT_EQ(instances_incremental_states.size(), 2u);
+  // One was cleared.
+  EXPECT_THAT(instances_incremental_states, Contains(false));
+  // The other one wasn't.
+  EXPECT_THAT(instances_incremental_states, Contains(true));
+
+  tracing_session->get()->StopBlocking();
+  tracing_session2->get()->StopBlocking();
+
+  perfetto::test::TracingMuxerImplInternalsForTest::
+      ClearDataSourceTlsStateOnReset<TestIncrementalDataSource>();
+}
+
 TEST_P(PerfettoApiTest, TrackEventRegistrationWithModule) {
   MockTracingMuxer muxer;
 
@@ -2045,6 +2148,113 @@ TEST_P(PerfettoApiTest, TrackEventCustomTrack) {
   perfetto::TrackEvent::EraseTrackDescriptor(track);
 }
 
+TEST_P(PerfettoApiTest, TrackEventCustomNamedTrack) {
+  // Create a new trace session.
+  auto* tracing_session = NewTraceWithCategories({"bar"});
+  tracing_session->get()->StartBlocking();
+
+  // Declare a custom track and give it a name.
+  uint64_t async_id = 123;
+
+  // Start events on one thread and end them on another.
+  TRACE_EVENT_BEGIN("bar", "AsyncEvent",
+                    perfetto::NamedTrack("MyCustomTrack", async_id),
+                    "debug_arg", 123);
+
+  TRACE_EVENT_BEGIN("bar", "SubEvent",
+                    perfetto::NamedTrack("MyCustomTrack", async_id),
+                    [](perfetto::EventContext) {});
+  const auto main_thread_track = perfetto::NamedTrack(
+      "MyCustomTrack", async_id, perfetto::ThreadTrack::Current());
+  std::thread thread([&] {
+    TRACE_EVENT_END("bar", perfetto::NamedTrack("MyCustomTrack", async_id));
+    TRACE_EVENT_END("bar", perfetto::NamedTrack("MyCustomTrack", async_id),
+                    "arg1", false, "arg2", true);
+    const auto thread_track = perfetto::NamedTrack(
+        "MyCustomTrack", async_id, perfetto::ThreadTrack::Current());
+    // Thread-scoped tracks will have different uuids on different thread even
+    // if the id matches.
+    ASSERT_NE(main_thread_track.uuid, thread_track.uuid);
+  });
+  thread.join();
+
+  auto trace = StopSessionAndReturnParsedTrace(tracing_session);
+
+  // Check that the track uuids match on the begin and end events.
+  const auto track = perfetto::NamedTrack("MyCustomTrack", async_id);
+  uint32_t main_thread_sequence = GetMainThreadPacketSequenceId(trace);
+  int event_count = 0;
+  bool found_descriptor = false;
+  for (const auto& packet : trace.packet()) {
+    if (packet.has_track_descriptor() &&
+        !packet.track_descriptor().has_process() &&
+        !packet.track_descriptor().has_thread()) {
+      auto td = packet.track_descriptor();
+      EXPECT_EQ("MyCustomTrack", td.static_name());
+      EXPECT_EQ(track.uuid, td.uuid());
+      EXPECT_EQ(perfetto::ProcessTrack::Current().uuid, td.parent_uuid());
+      found_descriptor = true;
+      continue;
+    }
+
+    if (!packet.has_track_event())
+      continue;
+    auto track_event = packet.track_event();
+    if (track_event.type() ==
+        perfetto::protos::gen::TrackEvent::TYPE_SLICE_BEGIN) {
+      EXPECT_EQ(main_thread_sequence, packet.trusted_packet_sequence_id());
+      EXPECT_EQ(track.uuid, track_event.track_uuid());
+    } else {
+      EXPECT_NE(main_thread_sequence, packet.trusted_packet_sequence_id());
+      EXPECT_EQ(track.uuid, track_event.track_uuid());
+    }
+    event_count++;
+  }
+  EXPECT_TRUE(found_descriptor);
+  EXPECT_EQ(4, event_count);
+}
+
+TEST_P(PerfettoApiTest, CustomTrackDescriptorForParent) {
+  // Setup the trace config.
+  perfetto::TraceConfig cfg;
+  cfg.set_duration_ms(500);
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("track_event");
+
+  // SetTrackDescriptor before starting the tracing session.
+  auto parent_track = perfetto::NamedTrack("MyCustomParent");
+  auto desc = parent_track.Serialize();
+  perfetto::TrackEvent::SetTrackDescriptor(parent_track, std::move(desc));
+
+  // Create a new trace session.
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  TRACE_EVENT_INSTANT("bar", "AsyncEvent",
+                      perfetto::NamedTrack("MyCustomChild", 123, parent_track));
+
+  auto trace = StopSessionAndReturnParsedTrace(tracing_session);
+
+  bool found_parent_desc = false;
+  bool found_child_desc = false;
+  for (const auto& packet : trace.packet()) {
+    if (packet.has_track_descriptor()) {
+      const auto& td = packet.track_descriptor();
+
+      if (td.static_name() == "MyCustomParent") {
+        found_parent_desc = true;
+      } else if (td.static_name() == "MyCustomChild") {
+        found_child_desc = true;
+      }
+    }
+  }
+  // SetTrackDescriptor for the parent happened before the tracing session was
+  // running, but when emitting the child, the parent should be emitted as well.
+  EXPECT_TRUE(found_parent_desc);
+  EXPECT_TRUE(found_child_desc);
+}
+
 TEST_P(PerfettoApiTest, TrackEventCustomTimestampClock) {
   // Create a new trace session.
   auto* tracing_session = NewTraceWithCategories({"foo"});
@@ -2294,7 +2504,9 @@ TEST_P(PerfettoApiTest, TrackEventAnonymousCustomTrack) {
   for (const auto& packet : trace.packet()) {
     if (packet.has_track_descriptor() &&
         !packet.track_descriptor().has_process() &&
-        !packet.track_descriptor().has_thread()) {
+        !packet.track_descriptor().has_thread() &&
+        packet.track_descriptor().uuid() !=
+            perfetto::ThreadTrack::Current().uuid) {
       auto td = packet.track_descriptor();
       EXPECT_EQ(track.uuid, td.uuid());
       EXPECT_EQ(perfetto::ThreadTrack::Current().uuid, td.parent_uuid());
@@ -5891,6 +6103,44 @@ TEST_P(PerfettoApiTest, Counters) {
                           "Voltage = 220", "Power = 1.21"));
 }
 
+TEST_P(PerfettoApiTest, CounterTrackUuid) {
+  // Create a new trace session.
+  auto* tracing_session = NewTraceWithCategories({"cat"});
+  tracing_session->get()->StartBlocking();
+
+  perfetto::CounterTrack track1 = perfetto::CounterTrack("MyCustomCounter", 1);
+  perfetto::CounterTrack track2 = perfetto::CounterTrack("MyCustomCounter", 2);
+
+  TRACE_COUNTER("cat", track1, 1);
+  TRACE_COUNTER("cat", track2, 2);
+
+  auto trace = StopSessionAndReturnParsedTrace(tracing_session);
+
+  std::map<uint64_t, size_t> counter_tracks;
+  std::map<uint64_t, size_t> counter_events;
+  for (const auto& packet : trace.packet()) {
+    if (packet.has_track_event()) {
+      auto track_event = packet.track_event();
+      EXPECT_EQ(perfetto::protos::gen::TrackEvent_Type_TYPE_COUNTER,
+                track_event.type());
+      ++counter_events[track_event.track_uuid()];
+    }
+    if (packet.has_track_descriptor() &&
+        packet.track_descriptor().has_counter()) {
+      auto desc = packet.track_descriptor();
+      EXPECT_EQ("MyCustomCounter", desc.static_name());
+      ++counter_tracks[desc.uuid()];
+    }
+  }
+  ASSERT_EQ(counter_events.size(), 2U);
+  ASSERT_EQ(counter_tracks.size(), 2U);
+  for (auto track : counter_tracks) {
+    ASSERT_EQ(counter_events.count(track.first), 1U);
+    EXPECT_EQ(counter_events.at(track.first), 1U);
+    EXPECT_EQ(track.second, 1U);
+  }
+}
+
 TEST_P(PerfettoApiTest, ScrapingTrackEventBegin) {
   auto* tracing_session = NewTraceWithCategories({"test"});
   tracing_session->get()->StartBlocking();
@@ -6304,6 +6554,41 @@ TEST_P(PerfettoApiTest, SystemDisconnectWhileStopping) {
 
   data_source->async_stop_closure();
   data_source->handle_stop_asynchronously = false;
+}
+
+TEST_P(PerfettoApiTest, CloneSession) {
+  perfetto::TraceConfig cfg;
+  cfg.set_unique_session_name("test_session");
+  auto* tracing_session = NewTraceWithCategories({"test"}, {}, cfg);
+  tracing_session->get()->StartBlocking();
+
+  TRACE_EVENT_BEGIN("test", "TestEvent");
+  TRACE_EVENT_END("test");
+
+  sessions_.emplace_back();
+  TestTracingSessionHandle* other_tracing_session = &sessions_.back();
+  other_tracing_session->session =
+      perfetto::Tracing::NewTrace(/*backend_type=*/GetParam());
+
+  WaitableTestEvent session_cloned;
+  other_tracing_session->get()->CloneTrace(
+      {"test_session"}, [&](perfetto::TracingSession::CloneTraceCallbackArgs) {
+        session_cloned.Notify();
+      });
+  session_cloned.Wait();
+
+  {
+    std::vector<char> raw_trace =
+        other_tracing_session->get()->ReadTraceBlocking();
+    std::string trace(raw_trace.data(), raw_trace.size());
+    EXPECT_THAT(trace, HasSubstr("TestEvent"));
+  }
+
+  {
+    std::vector<char> raw_trace = StopSessionAndReturnBytes(tracing_session);
+    std::string trace(raw_trace.data(), raw_trace.size());
+    EXPECT_THAT(trace, HasSubstr("TestEvent"));
+  }
 }
 
 class PerfettoStartupTracingApiTest : public PerfettoApiTest {

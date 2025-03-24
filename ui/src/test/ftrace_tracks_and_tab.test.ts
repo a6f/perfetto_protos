@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {test, expect, Page} from '@playwright/test';
+import {test, Page} from '@playwright/test';
 import {PerfettoTestHelper} from './perfetto_ui_test_helper';
 
 test.describe.configure({mode: 'serial'});
@@ -27,15 +27,14 @@ test.beforeAll(async ({browser}, _testInfo) => {
 });
 
 test('ftrace tracks', async () => {
-  await page.click('h1[ref="Ftrace Events"]');
-  await pth.waitForPerfettoIdle();
-  await expect(page).toHaveScreenshot('ftrace_events.png');
+  const ftraceGroupTrack = pth.locateTrack('Ftrace Events');
+  await pth.toggleTrackGroup(ftraceGroupTrack);
+  await pth.waitForIdleAndScreenshot('ftrace_events.png');
 });
 
 test('ftrace tab', async () => {
   await page.mouse.move(0, 0);
   await page.click('button[title="More Tabs"]');
   await page.getByRole('button', {name: 'Ftrace Events'}).click();
-  await pth.waitForPerfettoIdle();
-  await expect(page).toHaveScreenshot('ftrace_tab.png');
+  await pth.waitForIdleAndScreenshot('ftrace_tab.png');
 });

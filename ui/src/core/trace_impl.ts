@@ -13,13 +13,11 @@
 // limitations under the License.
 
 import {DisposableStack} from '../base/disposable_stack';
-import {assertTrue} from '../base/logging';
 import {createStore, Migrate, Store} from '../base/store';
 import {TimelineImpl} from './timeline';
 import {Command} from '../public/command';
 import {Trace} from '../public/trace';
 import {ScrollToArgs, setScrollToFunction} from '../public/scroll_helper';
-import {TraceInfo} from '../public/trace_info';
 import {TrackDescriptor} from '../public/track';
 import {EngineBase, EngineProxy} from '../trace_processor/engine';
 import {CommandManagerImpl} from './command_manager';
@@ -38,10 +36,23 @@ import {SearchResult} from '../public/search';
 import {PivotTableManager} from './pivot_table_manager';
 import {FlowManager} from './flow_manager';
 import {AppContext, AppImpl} from './app_impl';
-import {PluginManager} from './plugin_manager';
-import {ThreadDesc, ThreadMap} from '../public/threads';
+import {PluginManagerImpl} from './plugin_manager';
 import {RouteArgs} from '../public/route_schema';
 import {CORE_PLUGIN_ID} from './plugin_manager';
+import {Analytics} from '../public/analytics';
+import {getOrCreate} from '../base/utils';
+import {fetchWithProgress} from '../base/http_utils';
+import {TraceInfoImpl} from './trace_info_impl';
+import {PageHandler, PageManager} from '../public/page';
+import {createProxy} from '../base/utils';
+import {PageManagerImpl} from './page_manager';
+import {FeatureFlagManager, FlagSettings} from '../public/feature_flag';
+import {featureFlags} from './feature_flags';
+import {SerializedAppState} from './state_serialization_schema';
+import {PostedTrace} from './trace_source';
+import {PerfManager} from './perf_manager';
+import {EvtSource} from '../base/events';
+import {Raf} from '../public/raf';
 
 /**
  * Handles the per-trace state of the UI
@@ -51,7 +62,8 @@ import {CORE_PLUGIN_ID} from './plugin_manager';
  * This is the underlying storage for AppImpl, which instead has one instance
  * per trace per plugin.
  */
-class TraceContext implements Disposable {
+export class TraceContext implements Disposable {
+  private readonly pluginInstances = new Map<string, TraceImpl>();
   readonly appCtx: AppContext;
   readonly engine: EngineBase;
   readonly omniboxMgr = new OmniboxManagerImpl();
@@ -59,7 +71,7 @@ class TraceContext implements Disposable {
   readonly selectionMgr: SelectionManagerImpl;
   readonly tabMgr = new TabManagerImpl();
   readonly timeline: TimelineImpl;
-  readonly traceInfo: TraceInfo;
+  readonly traceInfo: TraceInfoImpl;
   readonly trackMgr = new TrackManagerImpl();
   readonly workspaceMgr = new WorkspaceManagerImpl();
   readonly noteMgr = new NoteManagerImpl();
@@ -67,15 +79,15 @@ class TraceContext implements Disposable {
   readonly pluginSerializableState = createStore<{[key: string]: {}}>({});
   readonly scrollHelper: ScrollHelper;
   readonly pivotTableMgr;
-  readonly threads = new Map<number, ThreadDesc>();
   readonly trash = new DisposableStack();
+  readonly onTraceReady = new EvtSource<void>();
 
   // List of errors that were encountered while loading the trace by the TS
   // code. These are on top of traceInfo.importErrors, which is a summary of
   // what TraceProcessor reports on the stats table at import time.
   readonly loadingErrors: string[] = [];
 
-  constructor(gctx: AppContext, engine: EngineBase, traceInfo: TraceInfo) {
+  constructor(gctx: AppContext, engine: EngineBase, traceInfo: TraceInfoImpl) {
     this.appCtx = gctx;
     this.engine = engine;
     this.trash.use(engine);
@@ -132,7 +144,7 @@ class TraceContext implements Disposable {
     if (clearSearch) {
       this.searchMgr.reset();
     }
-    if (switchToCurrentSelectionTab) {
+    if (switchToCurrentSelectionTab && selection.kind !== 'empty') {
       this.tabMgr.showCurrentSelectionTab();
     }
 
@@ -147,6 +159,16 @@ class TraceContext implements Disposable {
     this.selectionMgr.selectSearchResult(searchResult);
   }
 
+  // Gets or creates an instance of TraceImpl backed by the current TraceContext
+  // for the given plugin.
+  forPlugin(pluginId: string) {
+    return getOrCreate(this.pluginInstances, pluginId, () => {
+      const appForPlugin = this.appCtx.forPlugin(pluginId);
+      return new TraceImpl(appForPlugin, this);
+    });
+  }
+
+  // Called by AppContext.closeCurrentTrace().
   [Symbol.dispose]() {
     this.trash.dispose();
   }
@@ -160,15 +182,16 @@ class TraceContext implements Disposable {
  * for the core.
  */
 export class TraceImpl implements Trace {
-  private appImpl: AppImpl;
-  private traceCtx: TraceContext;
+  private readonly appImpl: AppImpl;
+  private readonly traceCtx: TraceContext;
 
   // This is not the original Engine base, rather an EngineProxy based on the
   // same engineBase.
-  private engineProxy: EngineProxy;
-  private trackMgrProxy: TrackManagerImpl;
-  private commandMgrProxy: CommandManagerImpl;
-  private sidebarProxy: SidebarManagerImpl;
+  private readonly engineProxy: EngineProxy;
+  private readonly trackMgrProxy: TrackManagerImpl;
+  private readonly commandMgrProxy: CommandManagerImpl;
+  private readonly sidebarProxy: SidebarManagerImpl;
+  private readonly pageMgrProxy: PageManagerImpl;
 
   // This is called by TraceController when loading a new trace, soon after the
   // engine has been set up. It obtains a new TraceImpl for the core. From that
@@ -177,18 +200,18 @@ export class TraceImpl implements Trace {
   static createInstanceForCore(
     appImpl: AppImpl,
     engine: EngineBase,
-    traceInfo: TraceInfo,
+    traceInfo: TraceInfoImpl,
   ): TraceImpl {
     const traceCtx = new TraceContext(
-      appImpl.__appCtxForTraceImplCtor,
+      appImpl.__appCtxForTrace,
       engine,
       traceInfo,
     );
-    const traceImpl = new TraceImpl(appImpl, traceCtx);
-    return traceImpl;
+    return traceCtx.forPlugin(CORE_PLUGIN_ID);
   }
 
-  private constructor(appImpl: AppImpl, ctx: TraceContext) {
+  // Only called by TraceContext.forPlugin().
+  constructor(appImpl: AppImpl, ctx: TraceContext) {
     const pluginId = appImpl.pluginId;
     this.appImpl = appImpl;
     this.traceCtx = ctx;
@@ -226,6 +249,17 @@ export class TraceImpl implements Trace {
       },
     });
 
+    this.pageMgrProxy = createProxy(ctx.appCtx.pageMgr, {
+      registerPage(pageHandler: PageHandler): Disposable {
+        const disposable = appImpl.pages.registerPage({
+          ...pageHandler,
+          pluginId: appImpl.pluginId,
+        });
+        traceUnloadTrash.use(disposable);
+        return disposable;
+      },
+    });
+
     // TODO(primiano): remove this injection once we plumb Trace everywhere.
     setScrollToFunction((x: ScrollToArgs) => ctx.scrollHelper.scrollTo(x));
   }
@@ -238,8 +272,7 @@ export class TraceImpl implements Trace {
   // another plugin. This is effectively a way to "fork" the core instance and
   // create the N instances for plugins.
   forkForPlugin(pluginId: string) {
-    assertTrue(pluginId != CORE_PLUGIN_ID);
-    return new TraceImpl(this.appImpl.forkForPlugin(pluginId), this.traceCtx);
+    return this.traceCtx.forPlugin(pluginId);
   }
 
   mountStore<T>(migrate: Migrate<T>): Store<T> {
@@ -253,6 +286,31 @@ export class TraceImpl implements Trace {
     return this.traceCtx.pluginSerializableState;
   }
 
+  async getTraceFile(): Promise<Blob> {
+    const src = this.traceInfo.source;
+    if (this.traceInfo.downloadable) {
+      if (src.type === 'ARRAY_BUFFER') {
+        return new Blob([src.buffer]);
+      } else if (src.type === 'FILE') {
+        return src.file;
+      } else if (src.type === 'URL') {
+        return await fetchWithProgress(src.url, (progressPercent: number) =>
+          this.omnibox.showStatusMessage(
+            `Downloading trace ${progressPercent}%`,
+          ),
+        );
+      }
+    }
+    // Not available in HTTP+RPC mode. Rather than propagating an undefined,
+    // show a graceful error (the ERR:trace_src will be intercepted by
+    // error_dialog.ts). We expect all users of this feature to not be able to
+    // do anything useful if we returned undefined (other than showing the same
+    // dialog).
+    // The caller was supposed to check that traceInfo.downloadable === true
+    // before calling this. Throwing while downloadable is true is a bug.
+    throw new Error(`Cannot getTraceFile(${src.type})`);
+  }
+
   get openerPluginArgs(): {[key: string]: unknown} | undefined {
     const traceSource = this.traceCtx.traceInfo.source;
     if (traceSource.type !== 'ARRAY_BUFFER') {
@@ -260,6 +318,10 @@ export class TraceImpl implements Trace {
     }
     const pluginArgs = traceSource.pluginArgs;
     return (pluginArgs ?? {})[this.pluginId];
+  }
+
+  get trace() {
+    return this;
   }
 
   get engine() {
@@ -294,7 +356,7 @@ export class TraceImpl implements Trace {
     return this.traceCtx.selectionMgr;
   }
 
-  get traceInfo(): TraceInfo {
+  get traceInfo(): TraceInfoImpl {
     return this.traceCtx.traceInfo;
   }
 
@@ -318,15 +380,6 @@ export class TraceImpl implements Trace {
     this.traceCtx.loadingErrors.push(err);
   }
 
-  get threads(): ThreadMap {
-    return this.traceCtx.threads;
-  }
-
-  setThreads(threadMap: ThreadMap) {
-    this.traceCtx.threads.clear();
-    threadMap.forEach((v, k) => this.traceCtx.threads.set(k, v));
-  }
-
   // App interface implementation.
 
   get pluginId(): string {
@@ -341,30 +394,67 @@ export class TraceImpl implements Trace {
     return this.sidebarProxy;
   }
 
+  get pages(): PageManager {
+    return this.pageMgrProxy;
+  }
+
   get omnibox(): OmniboxManagerImpl {
     return this.appImpl.omnibox;
   }
 
-  get plugins(): PluginManager {
+  get plugins(): PluginManagerImpl {
     return this.appImpl.plugins;
+  }
+
+  get analytics(): Analytics {
+    return this.appImpl.analytics;
   }
 
   get initialRouteArgs(): RouteArgs {
     return this.appImpl.initialRouteArgs;
   }
 
-  get rootUrl(): string {
-    return this.appImpl.rootUrl;
+  get featureFlags(): FeatureFlagManager {
+    return {
+      register: (settings: FlagSettings) => featureFlags.register(settings),
+    };
   }
 
-  scheduleRedraw(): void {
-    this.appImpl.scheduleRedraw();
+  get raf(): Raf {
+    return this.appImpl.raf;
   }
 
-  [Symbol.dispose]() {
-    if (this.pluginId === CORE_PLUGIN_ID) {
-      this.traceCtx[Symbol.dispose]();
-    }
+  navigate(newHash: string): void {
+    this.appImpl.navigate(newHash);
+  }
+
+  openTraceFromFile(file: File): void {
+    this.appImpl.openTraceFromFile(file);
+  }
+
+  openTraceFromUrl(url: string, serializedAppState?: SerializedAppState) {
+    this.appImpl.openTraceFromUrl(url, serializedAppState);
+  }
+
+  openTraceFromBuffer(args: PostedTrace): void {
+    this.appImpl.openTraceFromBuffer(args);
+  }
+
+  get onTraceReady() {
+    return this.traceCtx.onTraceReady;
+  }
+
+  get perfDebugging(): PerfManager {
+    return this.appImpl.perfDebugging;
+  }
+
+  get trash(): DisposableStack {
+    return this.traceCtx.trash;
+  }
+
+  // Nothing other than AppImpl should ever refer to this, hence the __ name.
+  get __traceCtxForApp() {
+    return this.traceCtx;
   }
 }
 
@@ -373,24 +463,6 @@ export interface TraceImplAttrs {
   trace: TraceImpl;
 }
 
-// Allows to take an existing class instance (`target`) and override some of its
-// methods via `overrides`. We use this for cases where we want to expose a
-// "manager" (e.g. TrackManager, SidebarManager) to the plugins, but we want to
-// override few of its methods (e.g. to inject the pluginId in the args).
-function createProxy<T extends object>(target: T, overrides: Partial<T>): T {
-  return new Proxy(target, {
-    get: (target: T, prop: string | symbol, receiver) => {
-      // If the property is overriden, use that; otherwise, use target
-      const overrideValue = (overrides as {[key: symbol | string]: {}})[prop];
-      if (overrideValue !== undefined) {
-        return typeof overrideValue === 'function'
-          ? overrideValue.bind(overrides)
-          : overrideValue;
-      }
-      const baseValue = Reflect.get(target, prop, receiver);
-      return typeof baseValue === 'function'
-        ? baseValue.bind(target)
-        : baseValue;
-    },
-  }) as T;
+export interface OptionalTraceImplAttrs {
+  trace?: TraceImpl;
 }

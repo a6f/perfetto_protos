@@ -19,19 +19,20 @@ import {DetailsShell} from '../../widgets/details_shell';
 import {GridLayout} from '../../widgets/grid_layout';
 import {Section} from '../../widgets/section';
 import {Tree, TreeNode} from '../../widgets/tree';
-import {Timestamp} from '../../frontend/widgets/timestamp';
-import {DurationWidget} from '../../frontend/widgets/duration';
+import {Timestamp} from '../../components/widgets/timestamp';
+import {DurationWidget} from '../../components/widgets/duration';
 import {Anchor} from '../../widgets/anchor';
-import {globals} from '../../frontend/globals';
 import {Engine} from '../../trace_processor/engine';
 import {TrackEventDetailsPanel} from '../../public/details_panel';
 import {TrackEventSelection} from '../../public/selection';
 import {Trace} from '../../public/trace';
+import {ThreadMap} from '../dev.perfetto.Thread/threads';
 
 interface SuspendResumeEventDetails {
   ts: time;
   dur: duration;
   utid: number;
+  cpu: number;
   event_type: string;
   device_name: string;
   driver_name: string;
@@ -40,12 +41,12 @@ interface SuspendResumeEventDetails {
 }
 
 export class SuspendResumeDetailsPanel implements TrackEventDetailsPanel {
-  private readonly trace: Trace;
   private suspendResumeEventDetails?: SuspendResumeEventDetails;
 
-  constructor(trace: Trace) {
-    this.trace = trace;
-  }
+  constructor(
+    private readonly trace: Trace,
+    private readonly threads: ThreadMap,
+  ) {}
 
   async load({eventId}: TrackEventSelection) {
     this.suspendResumeEventDetails = await loadSuspendResumeEventDetails(
@@ -57,7 +58,7 @@ export class SuspendResumeDetailsPanel implements TrackEventDetailsPanel {
   render() {
     const eventDetails = this.suspendResumeEventDetails;
     if (eventDetails) {
-      const threadInfo = this.trace.threads.get(eventDetails.utid);
+      const threadInfo = this.threads.get(eventDetails.utid);
       if (!threadInfo) {
         return null;
       }
@@ -104,6 +105,7 @@ export class SuspendResumeDetailsPanel implements TrackEventDetailsPanel {
                   `${threadInfo.threadName} [${threadInfo.tid}]`,
                 ),
               }),
+              m(TreeNode, {left: 'CPU', right: eventDetails.cpu}),
               m(TreeNode, {left: 'Event Type', right: eventDetails.event_type}),
             ),
           ),
@@ -122,7 +124,7 @@ export class SuspendResumeDetailsPanel implements TrackEventDetailsPanel {
   }
 
   goToThread(threadStateId: number) {
-    globals.selectionManager.selectSqlEvent('thread_state', threadStateId, {
+    this.trace.selection.selectSqlEvent('thread_state', threadStateId, {
       scrollToSelection: true,
     });
   }
@@ -133,16 +135,18 @@ async function loadSuspendResumeEventDetails(
   id: number,
 ): Promise<SuspendResumeEventDetails> {
   const suspendResumeDetailsQuery = `
-        SELECT ts,
-               dur,
-               EXTRACT_ARG(arg_set_id, 'utid') as utid,
-               EXTRACT_ARG(arg_set_id, 'event_type') as event_type,
-               EXTRACT_ARG(arg_set_id, 'device_name') as device_name,
-               EXTRACT_ARG(arg_set_id, 'driver_name') as driver_name,
-               EXTRACT_ARG(arg_set_id, 'callback_phase') as callback_phase
-        FROM slice
-        WHERE slice_id = ${id};
-    `;
+    SELECT
+      ts,
+      dur,
+      EXTRACT_ARG(arg_set_id, 'utid') as utid,
+      EXTRACT_ARG(arg_set_id, 'cpu') as cpu,
+      EXTRACT_ARG(arg_set_id, 'event_type') as event_type,
+      EXTRACT_ARG(arg_set_id, 'device_name') as device_name,
+      EXTRACT_ARG(arg_set_id, 'driver_name') as driver_name,
+      EXTRACT_ARG(arg_set_id, 'callback_phase') as callback_phase
+    FROM slice
+    WHERE slice_id = ${id};
+  `;
 
   const suspendResumeDetailsResult = await engine.query(
     suspendResumeDetailsQuery,
@@ -151,6 +155,7 @@ async function loadSuspendResumeEventDetails(
     ts: LONG,
     dur: LONG,
     utid: NUM,
+    cpu: NUM,
     event_type: STR_NULL,
     device_name: STR_NULL,
     driver_name: STR_NULL,
@@ -161,6 +166,7 @@ async function loadSuspendResumeEventDetails(
       ts: Time.fromRaw(0n),
       dur: Duration.fromRaw(0n),
       utid: 0,
+      cpu: 0,
       event_type: 'Error',
       device_name: 'Error',
       driver_name: 'Error',
@@ -170,11 +176,12 @@ async function loadSuspendResumeEventDetails(
   }
 
   const threadStateQuery = `
-        SELECT t.id as threadStateId
-        FROM thread_state t
-        WHERE t.utid = ${suspendResumeEventRow.utid}
-              AND t.ts <= ${suspendResumeEventRow.ts}
-              AND t.ts + t.dur > ${suspendResumeEventRow.ts};
+    SELECT t.id as threadStateId
+    FROM thread_state t
+    WHERE
+      t.utid = ${suspendResumeEventRow.utid}
+      AND t.ts <= ${suspendResumeEventRow.ts}
+      AND t.ts + t.dur > ${suspendResumeEventRow.ts};
   `;
   const threadStateResult = await engine.query(threadStateQuery);
   let threadStateId = 0;
@@ -189,6 +196,7 @@ async function loadSuspendResumeEventDetails(
     ts: Time.fromRaw(suspendResumeEventRow.ts),
     dur: Duration.fromRaw(suspendResumeEventRow.dur),
     utid: suspendResumeEventRow.utid,
+    cpu: suspendResumeEventRow.cpu,
     event_type:
       suspendResumeEventRow.event_type !== null
         ? suspendResumeEventRow.event_type

@@ -37,6 +37,7 @@ namespace perf_text_importer {
 struct PerfTextEvent;
 }
 
+struct AndroidDumpstateEvent;
 struct AndroidLogEvent;
 class PacketSequenceStateGeneration;
 class TraceBlobView;
@@ -57,7 +58,6 @@ class ProtoTraceParser {
   virtual void ParseFtraceEvent(uint32_t, int64_t, TracePacketData) = 0;
   virtual void ParseInlineSchedSwitch(uint32_t, int64_t, InlineSchedSwitch) = 0;
   virtual void ParseInlineSchedWaking(uint32_t, int64_t, InlineSchedWaking) = 0;
-  virtual void ParseLegacyV8ProfileEvent(int64_t, LegacyV8CpuProfileEvent) = 0;
 };
 
 class JsonTraceParser {
@@ -65,6 +65,7 @@ class JsonTraceParser {
   virtual ~JsonTraceParser();
   virtual void ParseJsonPacket(int64_t, std::string) = 0;
   virtual void ParseSystraceLine(int64_t, SystraceLine) = 0;
+  virtual void ParseLegacyV8ProfileEvent(int64_t, LegacyV8CpuProfileEvent) = 0;
 };
 
 class FuchsiaRecordParser {
@@ -89,6 +90,12 @@ class InstrumentsRowParser {
  public:
   virtual ~InstrumentsRowParser();
   virtual void ParseInstrumentsRow(int64_t, instruments_importer::Row) = 0;
+};
+
+class AndroidDumpstateEventParser {
+ public:
+  virtual ~AndroidDumpstateEventParser();
+  virtual void ParseAndroidDumpstateEvent(int64_t, AndroidDumpstateEvent) = 0;
 };
 
 class AndroidLogEventParser {

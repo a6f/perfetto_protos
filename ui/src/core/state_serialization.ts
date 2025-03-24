@@ -19,7 +19,7 @@ import {
   SerializedPluginState,
   SerializedSelection,
   SerializedAppState,
-} from '../public/state_serialization_schema';
+} from './state_serialization_schema';
 import {TimeSpan} from '../base/time';
 import {TraceImpl} from './trace_impl';
 
@@ -82,6 +82,16 @@ export function serializeAppState(trace: TraceImpl): SerializedAppState {
       kind: 'TRACK_EVENT',
       trackKey: stateSel.trackUri,
       eventId: stateSel.eventId.toString(),
+      detailsPanel: trace.selection
+        .getDetailsPanelForSelection()
+        ?.serializatonState(),
+    });
+  } else if (stateSel.kind === 'area') {
+    selection.push({
+      kind: 'AREA',
+      trackUris: stateSel.trackUris,
+      start: stateSel.start,
+      end: stateSel.end,
     });
   }
 
@@ -169,7 +179,7 @@ export function deserializeAppStatePhase2(
 
   // Restore the pinned tracks, if they exist.
   for (const uri of appState.pinnedTracks) {
-    const track = trace.workspace.findTrackByUri(uri);
+    const track = trace.workspace.getTrackByUri(uri);
     if (track) {
       track.pin();
     }
@@ -195,24 +205,7 @@ export function deserializeAppStatePhase2(
   }
 
   // Restore the selection
-  const sel = appState.selection[0];
-  if (sel !== undefined) {
-    const selMgr = trace.selection;
-    switch (sel.kind) {
-      case 'TRACK_EVENT':
-        selMgr.selectTrackEvent(sel.trackKey, parseInt(sel.eventId));
-        break;
-      case 'LEGACY_SCHED_SLICE':
-        selMgr.selectSqlEvent('sched_slice', sel.id);
-        break;
-      case 'LEGACY_SLICE':
-        selMgr.selectSqlEvent('slice', sel.id);
-        break;
-      case 'LEGACY_THREAD_STATE':
-        selMgr.selectSqlEvent('thread_slice', sel.id);
-        break;
-    }
-  }
+  trace.selection.deserialize(appState.selection[0]);
 }
 
 /**

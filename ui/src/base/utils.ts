@@ -20,13 +20,16 @@ export function exists<T>(value: T): value is NonNullable<T> {
   return value !== undefined && value !== null;
 }
 
-// Generic result type - similar to Rust's Result<T, E>
-export type Result<T, E = {}> =
-  | {success: true; result: T}
-  | {success: false; error: E};
-
-// Generic "optional" type
-export type Optional<T> = T | undefined;
+// Type util to make sure that exactly one of the passed keys is defined.
+// Example usage:
+// type FooOrBar = ExactlyOne<{foo: number; bar: number}>;
+// const x : FooOrBar = {foo: 42};      // OK
+// const x : FooOrBar = {bar: 42};      // OK
+// const x : FooOrBar = {};             // Compiler error
+// const x : FooOrBar = {foo:1, bar:2}; // Compiler error
+export type ExactlyOne<T, K extends keyof T = keyof T> = K extends keyof T
+  ? {[P in K]: T[P]} & {[P in Exclude<keyof T, K>]?: undefined}
+  : never;
 
 // Escape characters that are not allowed inside a css selector
 export function escapeCSSSelector(selector: string): string {
@@ -54,4 +57,29 @@ export function getOrCreate<K, V>(
   value = factory();
   map.set(key, value);
   return value;
+}
+
+// Allows to take an existing class instance (`target`) and override some of its
+// methods via `overrides`. We use this for cases where we want to expose a
+// "manager" (e.g. TrackManager, SidebarManager) to the plugins, but we want to
+// override few of its methods (e.g. to inject the pluginId in the args).
+export function createProxy<T extends object>(
+  target: T,
+  overrides: Partial<T>,
+): T {
+  return new Proxy(target, {
+    get: (target: T, prop: string | symbol, receiver) => {
+      // If the property is overriden, use that; otherwise, use target
+      const overrideValue = (overrides as {[key: symbol | string]: {}})[prop];
+      if (overrideValue !== undefined) {
+        return typeof overrideValue === 'function'
+          ? overrideValue.bind(overrides)
+          : overrideValue;
+      }
+      const baseValue = Reflect.get(target, prop, receiver);
+      return typeof baseValue === 'function'
+        ? baseValue.bind(target)
+        : baseValue;
+    },
+  }) as T;
 }

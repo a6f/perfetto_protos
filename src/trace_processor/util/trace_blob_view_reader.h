@@ -23,6 +23,7 @@
 #include <cstring>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/circular_queue.h"
@@ -50,13 +51,13 @@ class TraceBlobViewReader {
    public:
     ~Iterator() = default;
 
-    Iterator(const Iterator&) = delete;
-    Iterator& operator=(const Iterator&) = delete;
+    Iterator(const Iterator&) = default;
+    Iterator& operator=(const Iterator&) = default;
 
     Iterator(Iterator&&) = default;
     Iterator& operator=(Iterator&&) = default;
 
-    // Tries to advance the iterator |size| bytes forward. Returns true if
+    // Tries to advance the iterator `size` bytes forward. Returns true if
     // the advance was successful and false if it would overflow the iterator.
     // If false is returned, the state of the iterator is not changed.
     bool MaybeAdvance(size_t delta) {
@@ -77,12 +78,25 @@ class TraceBlobViewReader {
       return true;
     }
 
+    // Tries to read `size` bytes from the iterator.  Returns a TraceBlobView
+    // containing the data if `size` bytes were available and std::nullopt
+    // otherwise. If std::nullopt is returned, the state of the iterator is not
+    // changed.
+    std::optional<TraceBlobView> MaybeRead(size_t delta) {
+      std::optional<TraceBlobView> tbv =
+          reader_->SliceOff(file_offset(), delta);
+      if (PERFETTO_LIKELY(tbv)) {
+        PERFETTO_CHECK(MaybeAdvance(delta));
+      }
+      return tbv;
+    }
+
     // Tries to find a byte equal to |chr| in the iterator and, if found,
     // advance to it. Returns a TraceBlobView containing the data if the byte
-    // was found and could be advanced to and std::nulloptr if no such byte was
-    // found before the end of the iterator. If false is returned, the state of
-    // the iterator is not changed.
-    std::optional<TraceBlobView> MaybeFindAndAdvance(uint8_t chr) {
+    // was found and could be advanced to and std::nullopt if no such byte was
+    // found before the end of the iterator. If std::nullopt is returned, the
+    // state of the iterator is not changed.
+    std::optional<TraceBlobView> MaybeFindAndRead(uint8_t chr) {
       size_t begin = file_offset();
       if (!MaybeFindAndAdvanceInner(chr)) {
         return std::nullopt;
@@ -180,6 +194,11 @@ class TraceBlobViewReader {
   // NOTE: If `offset` < 'file_offset()' this method will CHECK fail.
   std::optional<TraceBlobView> SliceOff(size_t offset, size_t length) const;
 
+  // Similar to SliceOff but this method will not combine slices but instead
+  // potentially return multiple chunks. Useful if we are extracting slices to
+  // forward them to a `ChunkedTraceReader`.
+  std::vector<TraceBlobView> MultiSliceOff(size_t offset, size_t length) const;
+
   // Returns the offset to the start of the available data.
   size_t start_offset() const {
     return data_.empty() ? end_offset_ : data_.front().start_offset;
@@ -194,6 +213,9 @@ class TraceBlobViewReader {
   bool empty() const { return data_.empty(); }
 
  private:
+  template <typename Visitor>
+  auto SliceOffImpl(size_t offset, size_t length, Visitor& visitor) const;
+
   // CircularQueue has no const_iterator, so mutable is needed to access it from
   // const methods.
   mutable base::CircularQueue<Entry> data_;

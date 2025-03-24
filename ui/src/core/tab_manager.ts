@@ -14,12 +14,17 @@
 
 import {DetailsPanel} from '../public/details_panel';
 import {TabDescriptor, TabManager} from '../public/tab';
-import {raf} from './raf_scheduler';
+import {
+  SplitPanelDrawerVisibility,
+  toggleVisibility,
+} from '../widgets/split_panel';
 
 export interface ResolvedTab {
   uri: string;
   tab?: TabDescriptor;
 }
+
+export type TabPanelVisibility = 'COLLAPSED' | 'VISIBLE' | 'FULLSCREEN';
 
 /**
  * Stores tab & current selection section registries.
@@ -32,6 +37,8 @@ export class TabManagerImpl implements TabManager, Disposable {
   private _instantiatedTabs = new Map<string, TabDescriptor>();
   private _openTabs: string[] = []; // URIs of the tabs open.
   private _currentTab: string = 'current_selection';
+  private _tabPanelVisibility = SplitPanelDrawerVisibility.COLLAPSED;
+  private _tabPanelVisibilityChanged = false;
 
   [Symbol.dispose]() {
     // Dispose of all tabs that are currently alive
@@ -79,7 +86,17 @@ export class TabManagerImpl implements TabManager, Disposable {
       }
     }
     this._currentTab = uri;
-    raf.scheduleFullRedraw();
+
+    // The first time that we show a tab, auto-expand the tab bottom panel.
+    // However, if the user has later collapsed the panel (hence if
+    // _tabPanelVisibilityChanged == true), don't insist and leave things as
+    // they are.
+    if (
+      !this._tabPanelVisibilityChanged &&
+      this._tabPanelVisibility === SplitPanelDrawerVisibility.COLLAPSED
+    ) {
+      this.setTabPanelVisibility(SplitPanelDrawerVisibility.VISIBLE);
+    }
   }
 
   // Hide a tab in the tab bar pick a new tab to show.
@@ -111,7 +128,6 @@ export class TabManagerImpl implements TabManager, Disposable {
       // Otherwise just remove the tab
       this._openTabs = this._openTabs.filter((x) => x !== uri);
     }
-    raf.scheduleFullRedraw();
   }
 
   toggleTab(uri: string): void {
@@ -180,6 +196,19 @@ export class TabManagerImpl implements TabManager, Disposable {
     this._instantiatedTabs = newTabs;
 
     return tabs;
+  }
+
+  setTabPanelVisibility(visibility: SplitPanelDrawerVisibility): void {
+    this._tabPanelVisibility = visibility;
+    this._tabPanelVisibilityChanged = true;
+  }
+
+  toggleTabPanelVisibility(): void {
+    this.setTabPanelVisibility(toggleVisibility(this._tabPanelVisibility));
+  }
+
+  get tabPanelVisibility() {
+    return this._tabPanelVisibility;
   }
 
   /**

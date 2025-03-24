@@ -14,22 +14,29 @@
  * limitations under the License.
  */
 
-#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <sys/stat.h>
+#include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <chrono>
 #include <cinttypes>
-#include <functional>
-#include <iostream>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <google/protobuf/compiler/parser.h>
+#include <google/protobuf/descriptor.pb.h>
 #include <google/protobuf/dynamic_message.h>
+#include <google/protobuf/io/tokenizer.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include <google/protobuf/text_format.h>
 
@@ -38,23 +45,28 @@
 #include "perfetto/base/status.h"
 #include "perfetto/base/time.h"
 #include "perfetto/ext/base/file_utils.h"
-#include "perfetto/ext/base/flat_hash_map.h"
-#include "perfetto/ext/base/getopt.h"
+#include "perfetto/ext/base/getopt.h"  // IWYU pragma: keep
 #include "perfetto/ext/base/scoped_file.h"
+#include "perfetto/ext/base/scoped_mmap.h"
 #include "perfetto/ext/base/status_or.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/version.h"
-
+#include "perfetto/trace_processor/basic_types.h"
+#include "perfetto/trace_processor/iterator.h"
 #include "perfetto/trace_processor/metatrace_config.h"
 #include "perfetto/trace_processor/read_trace.h"
+#include "perfetto/trace_processor/trace_blob.h"
+#include "perfetto/trace_processor/trace_blob_view.h"
 #include "perfetto/trace_processor/trace_processor.h"
+#include "src/profiling/deobfuscator.h"
+#include "src/profiling/symbolizer/local_symbolizer.h"
+#include "src/profiling/symbolizer/symbolize_database.h"
 #include "src/trace_processor/metrics/all_chrome_metrics.descriptor.h"
 #include "src/trace_processor/metrics/all_webview_metrics.descriptor.h"
 #include "src/trace_processor/metrics/metrics.descriptor.h"
 #include "src/trace_processor/read_trace_internal.h"
 #include "src/trace_processor/rpc/stdiod.h"
-#include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/util/sql_modules.h"
 #include "src/trace_processor/util/status_macros.h"
 
@@ -63,10 +75,6 @@
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_HTTPD)
 #include "src/trace_processor/rpc/httpd.h"
 #endif
-#include "src/profiling/deobfuscator.h"
-#include "src/profiling/symbolizer/local_symbolizer.h"
-#include "src/profiling/symbolizer/symbolize_database.h"
-#include "src/profiling/symbolizer/symbolizer.h"
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||   \
     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) || \
@@ -98,8 +106,7 @@
 #include <unistd.h>  // For getuid() in GetConfigPath().
 #endif
 
-namespace perfetto {
-namespace trace_processor {
+namespace perfetto::trace_processor {
 
 namespace {
 TraceProcessor* g_tp;
@@ -507,7 +514,7 @@ base::StatusOr<QueryResult> ExtractQueryResult(Iterator* it, bool has_more) {
   QueryResult result;
 
   for (uint32_t c = 0; c < it->ColumnCount(); c++) {
-    fprintf(stderr, "column %d = %s\n", c, it->GetColumnName(c).c_str());
+    fprintf(stderr, "column %u = %s\n", c, it->GetColumnName(c).c_str());
     result.column_names.push_back(it->GetColumnName(c));
   }
 
@@ -729,6 +736,7 @@ struct CommandLineOptions {
   bool analyze_trace_proto_content = false;
   bool crop_track_events = false;
   std::vector<std::string> dev_flags;
+  std::string register_files_dir;
 };
 
 void PrintUsage(char** argv) {
@@ -789,6 +797,12 @@ Feature flags:
  --extra-checks                       Enables additional checks which can catch
                                       more SQL errors, but which incur
                                       additional runtime overhead.
+ --register-files-dir PATH            The contents of all files in this
+                                      directory and subdirectories will be made
+                                      available to the trace processor runtime.
+                                      Some importers can use this data to
+                                      augment trace data (e.g. decode ETM
+                                      instruction streams).
 
 Standard library:
  --add-sql-module MODULE_PATH         Files from the directory will be treated
@@ -853,6 +867,7 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
     OPT_CROP_TRACK_EVENTS,
     OPT_DEV_FLAG,
     OPT_STDIOD,
+    OPT_REGISTER_FILES_DIR,
   };
 
   static const option long_options[] = {
@@ -888,6 +903,9 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
       {"metrics-output", required_argument, nullptr, OPT_METRICS_OUTPUT},
       {"metric-extension", required_argument, nullptr, OPT_METRIC_EXTENSION},
       {"dev-flag", required_argument, nullptr, OPT_DEV_FLAG},
+      {"register-files-dir", required_argument, nullptr,
+       OPT_REGISTER_FILES_DIR},
+
       {nullptr, 0, nullptr, 0}};
 
   bool explicit_interactive = false;
@@ -1041,6 +1059,11 @@ CommandLineOptions ParseCommandLineOptions(int argc, char** argv) {
       continue;
     }
 
+    if (option == OPT_REGISTER_FILES_DIR) {
+      command_line_options.register_files_dir = optarg;
+      continue;
+    }
+
     PrintUsage(argv);
     exit(option == 'h' ? 0 : 1);
   }
@@ -1151,10 +1174,9 @@ base::Status RunQueries(const std::string& queries, bool expect_output) {
 base::Status RunQueriesFromFile(const std::string& query_file_path,
                                 bool expect_output) {
   std::string queries;
-  if (!base::ReadFile(query_file_path.c_str(), &queries)) {
+  if (!base::ReadFile(query_file_path, &queries)) {
     return base::ErrStatus("Unable to read file %s", query_file_path.c_str());
   }
-
   return RunQueries(queries, expect_output);
 }
 
@@ -1232,7 +1254,7 @@ base::Status IncludeSqlModule(std::string root, bool allow_override) {
   // Get module name
   size_t last_slash = root.rfind('/');
   if ((last_slash == std::string::npos) ||
-      (root.find(".") != std::string::npos))
+      (root.find('.') != std::string::npos))
     return base::ErrStatus("Module path must point to the directory: %s",
                            root.c_str());
 
@@ -1517,7 +1539,8 @@ base::Status StartInteractiveShell(const InteractiveOptions& options) {
       sscanf(line.get() + 1, "%31s %1023s", command, arg);
       if (strcmp(command, "quit") == 0 || strcmp(command, "q") == 0) {
         break;
-      } else if (strcmp(command, "help") == 0) {
+      }
+      if (strcmp(command, "help") == 0) {
         PrintShellUsage();
       } else if (strcmp(command, "dump") == 0 && strlen(arg)) {
         if (!ExportTraceToDatabase(arg).ok())
@@ -1614,6 +1637,22 @@ base::Status MaybeUpdateSqlModules(const CommandLineOptions& options) {
   return base::OkStatus();
 }
 
+base::Status RegisterAllFilesInFolder(const std::string& path,
+                                      TraceProcessor& tp) {
+  std::vector<std::string> files;
+  RETURN_IF_ERROR(base::ListFilesRecursive(path, files));
+  for (std::string file : files) {
+    file = path + "/" + file;
+    base::ScopedMmap mmap = base::ReadMmapWholeFile(file.c_str());
+    if (!mmap.IsValid()) {
+      return base::ErrStatus("Failed to mmap file: %s", file.c_str());
+    }
+    RETURN_IF_ERROR(tp.RegisterFileContent(
+        file, TraceBlobView(TraceBlob::FromMmap(std::move(mmap)))));
+  }
+  return base::OkStatus();
+}
+
 base::Status TraceProcessorMain(int argc, char** argv) {
   CommandLineOptions options = ParseCommandLineOptions(argc, argv);
 
@@ -1668,6 +1707,10 @@ base::Status TraceProcessorMain(int argc, char** argv) {
     metatrace_config.override_buffer_size = options.metatrace_buffer_capacity;
     metatrace_config.categories = options.metatrace_categories;
     tp->EnableMetatrace(metatrace_config);
+  }
+
+  if (!options.register_files_dir.empty()) {
+    RETURN_IF_ERROR(RegisterAllFilesInFolder(options.register_files_dir, *tp));
   }
 
   // Descriptor pool used for printing output as textproto. Building on top of
@@ -1788,8 +1831,7 @@ base::Status TraceProcessorMain(int argc, char** argv) {
 
 }  // namespace
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor
 
 int main(int argc, char** argv) {
   auto status = perfetto::trace_processor::TraceProcessorMain(argc, argv);

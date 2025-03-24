@@ -15,7 +15,7 @@
 import {Time} from '../base/time';
 import {featureFlags} from './feature_flags';
 import {FlowDirection, Flow} from './flow_types';
-import {asSliceSqlId} from '../trace_processor/sql_utils/core_types';
+import {asSliceSqlId} from '../components/sql_utils/core_types';
 import {LONG, NUM, STR_NULL} from '../trace_processor/query_result';
 import {
   ACTUAL_FRAMES_SLICE_TRACK_KIND,
@@ -23,7 +23,6 @@ import {
 } from '../public/track_kinds';
 import {TrackDescriptor, TrackManager} from '../public/track';
 import {AreaSelection, Selection, SelectionManager} from '../public/selection';
-import {raf} from './raf_scheduler';
 import {Engine} from '../trace_processor/engine';
 
 const SHOW_INDIRECT_PRECEDING_FLOWS_FLAG = featureFlags.register({
@@ -83,7 +82,7 @@ export class FlowManager {
     );`);
   }
 
-  async queryFlowEvents(query: string, callback: (flows: Flow[]) => void) {
+  async queryFlowEvents(query: string): Promise<Flow[]> {
     const result = await this.engine.query(query);
     const flows: Flow[] = [];
 
@@ -309,7 +308,13 @@ export class FlowManager {
       }
     }
 
-    callback(flows);
+    // Fill in the track uris if available
+    flows.forEach((flow) => {
+      flow.begin.trackUri = trackIdToTrack.get(flow.begin.trackId)?.uri;
+      flow.end.trackUri = trackIdToTrack.get(flow.end.trackId)?.uri;
+    });
+
+    return flows;
   }
 
   sliceSelected(sliceId: number) {
@@ -360,9 +365,7 @@ export class FlowManager {
     left join process process_out on process_out.upid = thread_out.upid
     left join process process_in on process_in.upid = thread_in.upid
     `;
-    this.queryFlowEvents(query, (flows: Flow[]) =>
-      this.setConnectedFlows(flows),
-    );
+    this.queryFlowEvents(query).then((flows) => this.setConnectedFlows(flows));
   }
 
   private areaSelected(area: AreaSelection) {
@@ -423,9 +426,7 @@ export class FlowManager {
       (t2.track_id in ${tracks}
         and (t2.ts <= ${endNs} and t2.ts >= ${startNs}))
     `;
-    this.queryFlowEvents(query, (flows: Flow[]) =>
-      this.setSelectedFlows(flows),
-    );
+    this.queryFlowEvents(query).then((flows) => this.setSelectedFlows(flows));
   }
 
   private setConnectedFlows(connectedFlows: Flow[]) {
@@ -446,12 +447,10 @@ export class FlowManager {
         }
       }
     }
-    raf.scheduleFullRedraw();
   }
 
   private setSelectedFlows(selectedFlows: Flow[]) {
     this._selectedFlows = selectedFlows;
-    raf.scheduleFullRedraw();
   }
 
   updateFlows(selection: Selection) {
@@ -509,7 +508,6 @@ export class FlowManager {
       );
       this._focusedFlowIdRight = nextFlowId;
     }
-    raf.scheduleFullRedraw();
   }
 
   // Select the slice connected to the flow in focus
@@ -561,7 +559,6 @@ export class FlowManager {
 
   setCategoryVisible(name: string, value: boolean) {
     this._visibleCategories.set(name, value);
-    raf.scheduleFullRedraw();
   }
 }
 

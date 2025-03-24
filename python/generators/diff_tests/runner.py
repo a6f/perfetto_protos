@@ -22,6 +22,7 @@ import sys
 import tempfile
 from binascii import unhexlify
 from dataclasses import dataclass
+from itertools import chain, product
 from typing import List, Tuple, Optional
 
 from google.protobuf import text_format, message_factory, descriptor_pool
@@ -211,6 +212,8 @@ class TestCaseRunner:
         tmp_perf_file.name,
         trace_path,
     ]
+    if self.test.register_files_dir:
+      cmd += ['--register-files-dir', self.test.register_files_dir]
     for sql_module_path in self.override_sql_module_paths:
       cmd += ['--override-sql-module', sql_module_path]
     tp = subprocess.Popen(
@@ -274,6 +277,8 @@ class TestCaseRunner:
         tmp_perf_file.name,
         trace_path,
     ]
+    if self.test.register_files_dir:
+      cmd += ['--register-files-dir', self.test.register_files_dir]
     for sql_module_path in self.override_sql_module_paths:
       cmd += ['--override-sql-module', sql_module_path]
     tp = subprocess.Popen(
@@ -417,15 +422,12 @@ class TestCaseRunner:
           os.path.join(metrics_protos_path, 'webview',
                        'all_webview_metrics.descriptor')
       ]
-    result_str = ""
-
     result, run_str = self.__run(metrics_descriptor_paths,
                                  extension_descriptor_paths, keep_input, rebase)
-    result_str += run_str
     if not result:
-      return self.test.name, result_str, None
+      return self.test.name, run_str, None
 
-    return self.test.name, result_str, result
+    return self.test.name, run_str, result
 
 
 # Fetches and executes all diff viable tests.
@@ -435,12 +437,15 @@ class DiffTestsRunner:
   trace_processor_path: str
   trace_descriptor_path: str
   test_runners: List[TestCaseRunner]
+  quiet: bool
 
   def __init__(self, name_filter: str, trace_processor_path: str,
                trace_descriptor: str, no_colors: bool,
-               override_sql_module_paths: List[str], test_dir: str):
+               override_sql_module_paths: List[str], test_dir: str,
+               quiet: bool):
     self.tests = read_all_tests(name_filter, test_dir)
     self.trace_processor_path = trace_processor_path
+    self.quiet = quiet
 
     out_path = os.path.dirname(self.trace_processor_path)
     self.trace_descriptor_path = get_trace_descriptor_path(
@@ -461,6 +466,7 @@ class DiffTestsRunner:
     failures = []
     rebased = []
     test_run_start = datetime.datetime.now()
+    completed_tests = 0
 
     with concurrent.futures.ProcessPoolExecutor() as e:
       fut = [
@@ -471,7 +477,16 @@ class DiffTestsRunner:
       ]
       for res in concurrent.futures.as_completed(fut):
         test_name, res_str, result = res.result()
-        sys.stderr.write(res_str)
+
+        if self.quiet:
+          completed_tests += 1
+          sys.stderr.write(f"\rRan {completed_tests} tests")
+          if not result.passed:
+            sys.stderr.write(f"\r")
+            sys.stderr.write(res_str)
+        else:
+          sys.stderr.write(res_str)
+
         if not result or not result.passed:
           if rebase:
             rebased.append(test_name)
@@ -480,4 +495,6 @@ class DiffTestsRunner:
           perf_results.append(result.perf_result)
     test_time_ms = int(
         (datetime.datetime.now() - test_run_start).total_seconds() * 1000)
+    if self.quiet:
+      sys.stderr.write(f"\r")
     return TestResults(failures, perf_results, rebased, test_time_ms)

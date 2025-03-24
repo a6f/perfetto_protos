@@ -145,6 +145,12 @@ class AndroidMetrics(TestSuite):
         query=Metric('android_blocking_calls_cuj_metric'),
         out=Path('android_blocking_calls_cuj_different_ui_thread.out'))
 
+  def test_android_blocking_calls_cuj_per_frame(self):
+      return DiffTestBlueprint(
+          trace=Path('android_blocking_calls_cuj_per_frame_metric.py'),
+          query=Metric('android_blocking_calls_cuj_per_frame_metric'),
+          out=Path('android_blocking_calls_cuj_per_frame_metric.out'))
+
   def test_sysui_notif_shade_list_builder(self):
     return DiffTestBlueprint(
         trace=Path('android_sysui_notif_shade_list_builder_metric.py'),
@@ -246,6 +252,30 @@ class AndroidMetrics(TestSuite):
         trace=DataPath('android_postboot_unlock.pftrace'),
         query=Metric('android_garbage_collection_unagg'),
         out=Path('android_garbage_collection_unagg.out'))
+
+  def test_android_garbage_collection_stats(self):
+    return DiffTestBlueprint(
+        trace=DataPath('android_postboot_unlock.pftrace'),
+        query=Metric('android_garbage_collection_stats'),
+        out=TextProto(r"""
+          android_garbage_collection_stats {
+            ts: 37574228004                                                                 dur: 2590476076
+            heap_size_mbs: 545.245650252069
+            heap_size_mb: 210.4808669354679
+            heap_allocated_mb: 157.435
+            heap_allocation_rate: 60.77454312687503
+            heap_live_mbs: 21.891720379191
+            heap_total_mbs: 53.434635626237
+            heap_utilization: 0.4096915815486898
+            gc_running_dur: 80862916
+            gc_running_rate: 0.031215465276506957
+            gc_running_efficiency: 1351.232098555335
+            gc_during_android_startup_dur: 177436890
+            total_android_startup_dur: 675663737
+            gc_during_android_startup_rate: 0.2626112373409793
+            gc_during_android_startup_efficiency: 160.61513239126643
+          }
+         """))
 
   def test_android_auto_multiuser_switch(self):
     return DiffTestBlueprint(
@@ -375,47 +405,61 @@ class AndroidMetrics(TestSuite):
         query=Metric("wattson_app_startup_rails"),
         out=Csv("""
         wattson_app_startup_rails {
-          metric_version: 3
+          metric_version: 4
+          power_model_version: 1
           period_info {
             period_id: 1
             period_dur: 384847255
             cpu_subsystem {
               estimated_mw: 4568.1772
+              estimated_mws: 1758.050415
               policy0 {
                 estimated_mw: 578.31256
+                estimated_mws: 222.561996
                 cpu0 {
                   estimated_mw: 148.99423
+                  estimated_mws: 57.340019
                 }
                 cpu1 {
                   estimated_mw: 130.13142
+                  estimated_mws: 50.080723
                 }
                 cpu2 {
                   estimated_mw: 127.60357
+                  estimated_mws: 49.107883
                 }
                 cpu3 {
                   estimated_mw: 171.58333
+                  estimated_mws: 66.033371
                 }
               }
               policy4 {
                 estimated_mw: 684.18835
+                estimated_mws: 263.308014
                 cpu4 {
                   estimated_mw: 344.39563
+                  estimated_mws: 132.539703
                 }
                 cpu5 {
                   estimated_mw: 339.7927
+                  estimated_mws: 130.768295
                 }
               }
               policy6 {
                 estimated_mw: 2163.158
+                estimated_mws: 832.48541
                 cpu6 {
                   estimated_mw: 1080.6881
+                  estimated_mws: 415.89984
                 }
                 cpu7 {
                   estimated_mw: 1082.47
+                  estimated_mws: 416.585602
                 }
               }
               dsu_scu {
                 estimated_mw: 1142.5181
+                estimated_mws: 439.694946
               }
             }
           }
@@ -428,29 +472,37 @@ class AndroidMetrics(TestSuite):
         query=Metric("wattson_trace_rails"),
         out=Csv("""
         wattson_trace_rails {
-          metric_version: 3
+          metric_version: 4
+          power_model_version: 1
           period_info {
             period_id: 1
-            period_dur: 61792616758
+            period_dur: 61792677852
             cpu_subsystem {
-              estimated_mw: 42.12355
+              estimated_mw: 42.123608
+              estimated_mws: 2602.930420
               policy0 {
-                estimated_mw: 34.71888
+                estimated_mw: 34.71892
+                estimated_mws: 2145.375244
                 cpu0 {
-                  estimated_mw: 10.7050705
+                  estimated_mw: 10.705099
+                  estimated_mws: 661.496704
                 }
                 cpu1 {
-                  estimated_mw: 8.315672
+                  estimated_mw: 8.315703
+                  estimated_mws: 513.849548
                 }
                 cpu2 {
-                  estimated_mw: 7.7776303
+                  estimated_mw: 7.7776227
+                  estimated_mws: 480.600128
                 }
                 cpu3 {
-                  estimated_mw: 7.920505
+                  estimated_mw: 7.9204974
+                  estimated_mws: 489.428741
                 }
               }
               dsu_scu {
-                estimated_mw: 7.404673
+                estimated_mw: 7.404684
+                estimated_mws: 457.555267
               }
             }
           }
@@ -481,31 +533,45 @@ class AndroidMetrics(TestSuite):
         query=Metric("wattson_markers_rails"),
         out=Csv("""
         wattson_markers_rails {
-          metric_version: 3
+          metric_version: 4
+          power_model_version: 1
           period_info {
             period_id: 1
             period_dur: 2031871358
             cpu_subsystem {
               estimated_mw: 46.540943
+              estimated_mws: 94.565208
               policy0 {
                 estimated_mw: 34.037483
+                estimated_mws: 69.159790
                 cpu0 {
                   estimated_mw: 14.416655
+                  estimated_mws: 29.292788
                 }
                 cpu1 {
                   estimated_mw: 6.641429
+                  estimated_mws: 13.494529
                 }
                 cpu2 {
                   estimated_mw: 8.134797
+                  estimated_mws: 16.528862
                 }
                 cpu3 {
                   estimated_mw: 4.8446035
+                  estimated_mws: 9.843612
                 }
               }
               dsu_scu {
                 estimated_mw: 12.503458
+                estimated_mws: 25.405418
               }
             }
           }
         }
         """))
+
+  def test_wattson_atrace_apps_rails_output(self):
+    return DiffTestBlueprint(
+        trace=DataPath('wattson_jank_cuj.pb'),
+        query=Metric("wattson_atrace_apps_rails"),
+        out=Path('wattson_atrace_apps_rails.out'))

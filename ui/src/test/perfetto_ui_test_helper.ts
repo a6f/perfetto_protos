@@ -79,24 +79,16 @@ export class PerfettoTestHelper {
   ) {
     await this.page.mouse.move(0, 0); // Move mouse out of the way.
     await this.waitForPerfettoIdle();
-    await expect(this.page).toHaveScreenshot(screenshotName, opts);
-  }
-
-  locateTrackGroup(name: string): Locator {
-    return this.page
-      .locator('.pf-panel-group')
-      .filter({has: this.page.locator(`h1[ref="${name}"]`)});
+    await expect.soft(this.page).toHaveScreenshot(screenshotName, opts);
   }
 
   async toggleTrackGroup(locator: Locator) {
-    await locator.locator('.pf-track-title').first().click();
+    await locator.locator('.pf-track__shell').first().click();
     await this.waitForPerfettoIdle();
   }
 
   locateTrack(name: string, trackGroup?: Locator): Locator {
-    return (trackGroup ?? this.page)
-      .locator('.pf-track')
-      .filter({has: this.page.locator(`h1[ref="${name}"]`)});
+    return (trackGroup ?? this.page).locator(`.pf-track[ref="${name}"]`);
   }
 
   pinTrackUsingShellBtn(track: Locator) {
@@ -106,7 +98,7 @@ export class PerfettoTestHelper {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   async runCommand(cmdId: string, ...args: any[]) {
     await this.page.evaluate(
-      (arg) => self.globals.commandManager.runCommand(arg.cmdId, ...arg.args),
+      (arg) => self.app.commands.runCommand(arg.cmdId, ...arg.args),
       {cmdId, args},
     );
   }

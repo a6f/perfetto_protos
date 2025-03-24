@@ -26,9 +26,7 @@
   --selection-stroke-color: #00344596;
   --selection-fill-color: #8398e64d;
   --overview-timeline-non-visible-color: #c8c8c8cc;
-  --details-content-height: 280px;
-  --collapsed-background: hsla(190, 49%, 97%, 1);
-  --expanded-background: hsl(215, 22%, 19%);
+  --details-content-height: 308px;
 }
 
 @mixin transition($time: 0.1s) {
@@ -155,24 +153,6 @@ button.close {
 
 .page {
   grid-area: page;
-}
-
-.alerts {
-  grid-area: alerts;
-  background-color: #f2f2f2;
-  > div {
-    font-family: "Roboto", sans-serif;
-    font-weight: 400;
-    letter-spacing: 0.25px;
-    padding: 1rem;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    button {
-      width: 24px;
-      height: 24px;
-    }
-  }
 }
 
 @mixin table-font-size {
