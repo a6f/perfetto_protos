@@ -56,11 +56,8 @@ import {utf8Decode} from '../base/string_utils';
 import {Duration, duration, Time, time} from '../base/time';
 
 export type SqlValue = string | number | bigint | null | Uint8Array;
-// TODO(altimin): Replace ColumnType with SqlValue across the codebase and
-// remove export here.
-export type ColumnType = SqlValue;
 
-export const UNKNOWN: ColumnType = null;
+export const UNKNOWN: SqlValue = null;
 export const NUM = 0;
 export const STR = 'str';
 export const NUM_NULL: number | null = 1;
@@ -71,6 +68,73 @@ export const LONG: bigint = 0n;
 export const LONG_NULL: bigint | null = 1n;
 
 const SHIFT_32BITS = 32n;
+
+// Describes the inheritance tree of the above types.
+const inheritanceTree = new Map<SqlValue, {readonly extends?: SqlValue}>([
+  [NUM, {extends: NUM_NULL}],
+  [NUM_NULL, {extends: UNKNOWN}],
+  [LONG, {extends: LONG_NULL}],
+  [LONG_NULL, {extends: UNKNOWN}],
+  [BLOB, {extends: BLOB_NULL}],
+  [BLOB_NULL, {extends: UNKNOWN}],
+  [STR, {extends: STR_NULL}],
+  [STR_NULL, {extends: UNKNOWN}],
+  [UNKNOWN, {}],
+]);
+
+/**
+ * Check whether a given type extends another.
+ *
+ * @param required - The type we want to extend.
+ * @param actual - The type to test.
+ * @returns - True if `actual` extends `required`.
+ */
+export function checkExtends(required: SqlValue, actual: SqlValue): boolean {
+  // If the types are the same, just return true
+  if (required === actual) return true;
+
+  const ancestry = getAncestryPath(actual);
+  return ancestry.includes(required);
+}
+
+/**
+ * Returns the closest common ancestor of two types.
+ */
+export function unionTypes(
+  typeA: SqlValue,
+  typeB: SqlValue,
+): SqlValue | undefined {
+  // If the types are the same, just return the same type
+  if (typeA === typeB) return typeA;
+
+  // Get the ancestry path for each type
+  const pathA = getAncestryPath(typeA);
+  const pathB = getAncestryPath(typeB);
+
+  // Find the first common type in both ancestry paths
+  for (const type of pathA) {
+    if (pathB.includes(type)) {
+      return type;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Returns the ancestry path from the given type to the root, inclusive.
+ */
+function getAncestryPath(type: SqlValue): SqlValue[] {
+  const path: SqlValue[] = [type];
+  let current = inheritanceTree.get(type);
+
+  while (current && current.extends !== undefined) {
+    path.push(current.extends);
+    current = inheritanceTree.get(current.extends);
+  }
+
+  return path;
+}
 
 // Fast decode varint int64 into a bigint
 // Inspired by
@@ -159,7 +223,7 @@ export class QueryError extends Error {
 
 // One row extracted from an SQL result:
 export interface Row {
-  [key: string]: ColumnType;
+  [key: string]: SqlValue;
 }
 
 // The methods that any iterator has to implement.
@@ -174,7 +238,7 @@ export interface RowIteratorBase {
   // for (const it = queryResult.iter({}); it.valid(); it.next()) {
   //   for (const columnName : queryResult.columns()) {
   //      console.log(it.get(columnName));
-  get(columnName: string): ColumnType;
+  get(columnName: string): SqlValue;
 }
 
 // A RowIterator is a type that has all the fields defined in the query spec
@@ -186,7 +250,7 @@ export interface RowIteratorBase {
 //  console.log(iter.name, iter.surname);
 export type RowIterator<T extends Row> = RowIteratorBase & T;
 
-function columnTypeToString(t: ColumnType): string {
+function columnTypeToString(t: SqlValue): string {
   switch (t) {
     case NUM:
       return 'NUM';
@@ -211,7 +275,7 @@ function columnTypeToString(t: ColumnType): string {
   }
 }
 
-function isCompatible(actual: CellType, expected: ColumnType): boolean {
+function isCompatible(actual: CellType, expected: SqlValue): boolean {
   switch (actual) {
     case CellType.CELL_NULL:
       return (
@@ -734,7 +798,7 @@ class RowIteratorImpl implements RowIteratorBase {
     return new QueryError(message, this.resultObj.errorInfo);
   }
 
-  get(columnName: string): ColumnType {
+  get(columnName: string): SqlValue {
     const res = this.rowData[columnName];
     if (res === undefined) {
       throw this.makeError(
@@ -913,7 +977,7 @@ class RowIteratorImplWithRowData implements RowIteratorBase {
 
   next: () => void;
   valid: () => boolean;
-  get: (columnName: string) => ColumnType;
+  get: (columnName: string) => SqlValue;
 
   constructor(querySpec: Row, res: QueryResultImpl) {
     const thisAsRow = this as {} as Row;
@@ -1018,7 +1082,7 @@ export function createQueryResult(
 
 // Throws if the value cannot be reasonably converted to a bigint.
 // Assumes value is in native time units.
-export function timeFromSql(value: ColumnType): time {
+export function timeFromSql(value: SqlValue): time {
   if (typeof value === 'bigint') {
     return Time.fromRaw(value);
   } else if (typeof value === 'number') {
@@ -1032,7 +1096,7 @@ export function timeFromSql(value: ColumnType): time {
 
 // Throws if the value cannot be reasonably converted to a bigint.
 // Assumes value is in nanoseconds.
-export function durationFromSql(value: ColumnType): duration {
+export function durationFromSql(value: SqlValue): duration {
   if (typeof value === 'bigint') {
     return value;
   } else if (typeof value === 'number') {

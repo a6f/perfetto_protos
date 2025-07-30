@@ -13,26 +13,21 @@
 // limitations under the License.
 
 import m from 'mithril';
-import {BigintMath} from '../../base/bigint_math';
 import {copyToClipboard} from '../../base/clipboard';
-import {Time} from '../../base/time';
 import {QueryResponse} from './queries';
 import {Row} from '../../trace_processor/query_result';
-import {Anchor} from '../../widgets/anchor';
 import {Button} from '../../widgets/button';
 import {Callout} from '../../widgets/callout';
 import {DetailsShell} from '../../widgets/details_shell';
-import {downloadData} from '../../base/download_utils';
 import {Router} from '../../core/router';
-import {scrollTo} from '../../public/scroll_helper';
 import {AppImpl} from '../../core/app_impl';
 import {Trace} from '../../public/trace';
-
-interface QueryTableRowAttrs {
-  trace: Trace;
-  row: Row;
-  columns: string[];
-}
+import {MenuItem, PopupMenu} from '../../widgets/menu';
+import {Icons} from '../../base/semantic_icons';
+import {DataGrid, renderCell} from '../widgets/data_grid/data_grid';
+import {DataGridDataSource} from '../widgets/data_grid/common';
+import {InMemoryDataSource} from '../widgets/data_grid/in_memory_data_source';
+import {Anchor} from '../../widgets/anchor';
 
 type Numeric = bigint | number;
 
@@ -79,138 +74,36 @@ export function getSliceId(row: Row): number | undefined {
   return undefined;
 }
 
-class QueryTableRow implements m.ClassComponent<QueryTableRowAttrs> {
-  private readonly trace: Trace;
-
-  constructor({attrs}: m.Vnode<QueryTableRowAttrs>) {
-    this.trace = attrs.trace;
-  }
-
-  view(vnode: m.Vnode<QueryTableRowAttrs>) {
-    const {row, columns} = vnode.attrs;
-    const cells = columns.map((col) => this.renderCell(col, row[col]));
-
-    // TODO(dproy): Make click handler work from analyze page.
-    if (
-      Router.parseUrl(window.location.href).page === '/viewer' &&
-      isSliceish(row)
-    ) {
-      return m(
-        'tr',
-        {
-          onclick: () => this.selectAndRevealSlice(row, false),
-          // TODO(altimin): Consider improving the logic here (e.g. delay?) to
-          // account for cases when dblclick fires late.
-          ondblclick: () => this.selectAndRevealSlice(row, true),
-          clickable: true,
-          title: 'Go to slice',
-        },
-        cells,
-      );
-    } else {
-      return m('tr', cells);
-    }
-  }
-
-  private renderCell(name: string, value: Row[string]) {
-    if (value instanceof Uint8Array) {
-      return m('td', this.renderBlob(name, value));
-    } else {
-      return m('td', `${value}`);
-    }
-  }
-
-  private renderBlob(name: string, value: Uint8Array) {
-    return m(
-      Anchor,
-      {
-        onclick: () => downloadData(`${name}.blob`, value),
-      },
-      `Blob (${value.length} bytes)`,
-    );
-  }
-
-  private selectAndRevealSlice(
-    row: Row & Sliceish,
-    switchToCurrentSelectionTab: boolean,
-  ) {
-    const trackId = Number(row.track_id);
-    const sliceStart = Time.fromRaw(BigInt(row.ts));
-    // row.dur can be negative. Clamp to 1ns.
-    const sliceDur = BigintMath.max(BigInt(row.dur), 1n);
-    const trackUri = this.trace.tracks.findTrack((td) =>
-      td.tags?.trackIds?.includes(trackId),
-    )?.uri;
-    if (trackUri !== undefined) {
-      scrollTo({
-        track: {uri: trackUri, expandGroup: true},
-        time: {start: sliceStart, end: Time.add(sliceStart, sliceDur)},
-      });
-      const sliceId = getSliceId(row);
-      if (sliceId !== undefined) {
-        this.selectSlice(sliceId, switchToCurrentSelectionTab);
-      }
-    }
-  }
-
-  private selectSlice(sliceId: number, switchToCurrentSelectionTab: boolean) {
-    this.trace.selection.selectSqlEvent('slice', sliceId, {
-      switchToCurrentSelectionTab,
-      scrollToSelection: true,
-    });
-  }
-}
-
-interface QueryTableContentAttrs {
-  trace: Trace;
-  resp: QueryResponse;
-}
-
-class QueryTableContent implements m.ClassComponent<QueryTableContentAttrs> {
-  private previousResponse?: QueryResponse;
-
-  onbeforeupdate(vnode: m.CVnode<QueryTableContentAttrs>) {
-    return vnode.attrs.resp !== this.previousResponse;
-  }
-
-  view(vnode: m.CVnode<QueryTableContentAttrs>) {
-    const resp = vnode.attrs.resp;
-    this.previousResponse = resp;
-    const cols = [];
-    for (const col of resp.columns) {
-      cols.push(m('td', col));
-    }
-    const tableHeader = m('tr', cols);
-
-    const rows = resp.rows.map((row) =>
-      m(QueryTableRow, {trace: vnode.attrs.trace, row, columns: resp.columns}),
-    );
-
-    if (resp.error) {
-      return m('.query-error', `SQL error: ${resp.error}`);
-    } else {
-      return m(
-        'table.pf-query-table',
-        m('thead', tableHeader),
-        m('tbody', rows),
-      );
-    }
-  }
-}
-
 interface QueryTableAttrs {
-  trace: Trace;
-  query: string;
-  resp?: QueryResponse;
-  contextButtons?: m.Child[];
-  fillParent: boolean;
+  readonly trace: Trace;
+  readonly query: string;
+  readonly resp?: QueryResponse;
+  readonly contextButtons?: m.Child[];
+  readonly fillParent: boolean;
 }
 
 export class QueryTable implements m.ClassComponent<QueryTableAttrs> {
   private readonly trace: Trace;
+  private dataSource?: DataGridDataSource;
 
   constructor({attrs}: m.CVnode<QueryTableAttrs>) {
     this.trace = attrs.trace;
+    if (attrs.resp) {
+      this.dataSource = new InMemoryDataSource(attrs.resp.rows);
+    }
+  }
+
+  onbeforeupdate(
+    vnode: m.Vnode<QueryTableAttrs, this>,
+    old: m.VnodeDOM<QueryTableAttrs, this>,
+  ): boolean | void {
+    if (vnode.attrs.resp !== old.attrs.resp) {
+      if (vnode.attrs.resp) {
+        this.dataSource = new InMemoryDataSource(vnode.attrs.resp.rows);
+      } else {
+        this.dataSource = undefined;
+      }
+    }
   }
 
   view({attrs}: m.CVnode<QueryTableAttrs>) {
@@ -224,11 +117,11 @@ export class QueryTable implements m.ClassComponent<QueryTableAttrs> {
         buttons: this.renderButtons(query, contextButtons, resp),
         fillParent,
       },
-      resp && this.renderTableContent(resp),
+      resp && this.dataSource && this.renderTableContent(resp, this.dataSource),
     );
   }
 
-  renderTitle(resp?: QueryResponse) {
+  private renderTitle(resp?: QueryResponse) {
     if (!resp) {
       return 'Query - running';
     }
@@ -240,31 +133,44 @@ export class QueryTable implements m.ClassComponent<QueryTableAttrs> {
     return `Query result (${result}) - ${resp.durationMs.toLocaleString()}ms`;
   }
 
-  renderButtons(
+  private renderButtons(
     query: string,
     contextButtons: m.Child[],
     resp?: QueryResponse,
   ) {
     return [
       contextButtons,
-      m(Button, {
-        label: 'Copy query',
-        onclick: () => {
-          copyToClipboard(query);
+      m(
+        PopupMenu,
+        {
+          trigger: m(Button, {
+            label: 'Copy',
+            rightIcon: Icons.ContextMenu,
+          }),
         },
-      }),
-      resp &&
-        resp.error === undefined &&
-        m(Button, {
-          label: 'Copy result (.tsv)',
-          onclick: () => {
-            queryResponseToClipboard(resp);
-          },
+        m(MenuItem, {
+          label: 'Query',
+          onclick: () => copyToClipboard(query),
         }),
+        resp &&
+          resp.error === undefined && [
+            m(MenuItem, {
+              label: 'Result (.tsv)',
+              onclick: () => queryResponseAsTsvToClipboard(resp),
+            }),
+            m(MenuItem, {
+              label: 'Result (.md)',
+              onclick: () => queryResponseAsMarkdownToClipboard(resp),
+            }),
+          ],
+      ),
     ];
   }
 
-  renderTableContent(resp: QueryResponse) {
+  private renderTableContent(
+    resp: QueryResponse,
+    dataSource: DataGridDataSource,
+  ) {
     return m(
       '.pf-query-panel',
       resp.statementWithOutputCount > 1 &&
@@ -278,12 +184,64 @@ export class QueryTable implements m.ClassComponent<QueryTableAttrs> {
             'Only the results for the last statement are displayed.',
           ),
         ),
-      m(QueryTableContent, {trace: this.trace, resp}),
+      this.renderContent(resp, dataSource),
     );
+  }
+
+  private renderContent(resp: QueryResponse, dataSource: DataGridDataSource) {
+    if (resp.error) {
+      return m('.query-error', `SQL error: ${resp.error}`);
+    }
+
+    const onViewerPage =
+      Router.parseUrl(window.location.href).page === '/viewer';
+
+    return m(DataGrid, {
+      // If filters are defined by no onFilterChanged handler, the grid operates
+      // in filter read only mode.
+      filters: [],
+      columns: resp.columns.map((c) => ({name: c})),
+      data: dataSource,
+      cellRenderer: (value, name, row) => {
+        const sliceId = getSliceId(row);
+        const cell = renderCell(value, name);
+        if (
+          name === 'id' &&
+          sliceId !== undefined &&
+          onViewerPage &&
+          isSliceish(row)
+        ) {
+          return m(
+            Anchor,
+            {
+              title: 'Go to slice',
+              icon: Icons.UpdateSelection,
+              onclick: () => this.goToSlice(sliceId, false),
+              ondblclick: () => this.goToSlice(sliceId, true),
+            },
+            cell,
+          );
+        } else {
+          return cell;
+        }
+      },
+    });
+  }
+
+  private goToSlice(
+    sliceId: number,
+    switchToCurrentSelectionTab: boolean,
+  ): void {
+    this.trace.selection.selectSqlEvent('slice', sliceId, {
+      switchToCurrentSelectionTab,
+      scrollToSelection: true,
+    });
   }
 }
 
-async function queryResponseToClipboard(resp: QueryResponse): Promise<void> {
+async function queryResponseAsTsvToClipboard(
+  resp: QueryResponse,
+): Promise<void> {
   const lines: string[][] = [];
   lines.push(resp.columns);
   for (const row of resp.rows) {
@@ -294,5 +252,48 @@ async function queryResponseToClipboard(resp: QueryResponse): Promise<void> {
     }
     lines.push(line);
   }
-  copyToClipboard(lines.map((line) => line.join('\t')).join('\n'));
+  await copyToClipboard(lines.map((line) => line.join('\t')).join('\n'));
+}
+
+async function queryResponseAsMarkdownToClipboard(
+  resp: QueryResponse,
+): Promise<void> {
+  // Convert all values to strings.
+  // rows = [header, separators, ...body]
+  const rows: string[][] = [];
+  rows.push(resp.columns);
+  rows.push(resp.columns.map((_) => '---'));
+  for (const responseRow of resp.rows) {
+    rows.push(
+      resp.columns.map((responseCol) => {
+        const value = responseRow[responseCol];
+        return value === null ? 'NULL' : `${value}`;
+      }),
+    );
+  }
+
+  // Find the maximum width of each column.
+  const maxWidths: number[] = Array(resp.columns.length).fill(0);
+  for (const row of rows) {
+    for (let i = 0; i < resp.columns.length; i++) {
+      if (row[i].length > maxWidths[i]) {
+        maxWidths[i] = row[i].length;
+      }
+    }
+  }
+
+  const text = rows
+    .map((row, rowIndex) => {
+      // Pad each column to the maximum width with hyphens (separator row) or
+      // spaces (all other rows).
+      const expansionChar = rowIndex === 1 ? '-' : ' ';
+      const line: string[] = row.map(
+        (str, colIndex) =>
+          str + expansionChar.repeat(maxWidths[colIndex] - str.length),
+      );
+      return `| ${line.join(' | ')} |`;
+    })
+    .join('\n');
+
+  await copyToClipboard(text);
 }

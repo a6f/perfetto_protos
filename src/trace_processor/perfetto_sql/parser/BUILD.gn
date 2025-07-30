@@ -29,8 +29,8 @@ source_set("parser") {
     "../../../../gn:sqlite",
     "../../../base",
     "../../sqlite",
-    "../../util",
     "../../util:sql_argument",
+    "../grammar",
     "../preprocessor",
     "../tokenizer",
   ]
@@ -47,6 +47,8 @@ perfetto_unittest_source_set("unittests") {
     "../../../../gn:sqlite",
     "../../../base",
     "../../sqlite",
+    "../../util:sql_argument",
+    "../preprocessor",
   ]
 }
 
@@ -60,5 +62,6 @@ perfetto_unittest_source_set("test_utils") {
     "../../../../gn:sqlite",
     "../../../base",
     "../../sqlite",
+    "../../util:sql_argument",
   ]
 }

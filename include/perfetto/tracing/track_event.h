@@ -192,9 +192,7 @@ constexpr bool IsDynamicCategory(const ::perfetto::DynamicCategory&) {
   } /* namespace PERFETTO_TRACK_EVENT_NAMESPACE  */                        \
   using PERFETTO_TRACK_EVENT_NAMESPACE::TrackEvent;                        \
   } /* namespace ns */                                                     \
-  PERFETTO_DECLARE_DATA_SOURCE_STATIC_MEMBERS_WITH_ATTRS(                  \
-      attrs, ns::PERFETTO_TRACK_EVENT_NAMESPACE::TrackEvent,               \
-      ::perfetto::internal::TrackEventDataSourceTraits)
+  PERFETTO_INTERNAL_SWALLOW_SEMICOLON()
 
 // Register the set of available categories by passing a list of categories to
 // this macro: perfetto::Category("cat1"), perfetto::Category("cat2"), ...
@@ -240,9 +238,7 @@ constexpr bool IsDynamicCategory(const ::perfetto::DynamicCategory&) {
   PERFETTO_INTERNAL_DEFINE_TRACK_EVENT_DATA_SOURCE()                           \
   } /* namespace PERFETTO_TRACK_EVENT_NAMESPACE */                             \
   } /* namespace ns */                                                         \
-  PERFETTO_DEFINE_DATA_SOURCE_STATIC_MEMBERS_WITH_ATTRS(                       \
-      attrs, ns::PERFETTO_TRACK_EVENT_NAMESPACE::TrackEvent,                   \
-      ::perfetto::internal::TrackEventDataSourceTraits)
+  PERFETTO_INTERNAL_SWALLOW_SEMICOLON()
 
 // Allocate storage for each category by using this macro once per track event
 // namespace.
@@ -255,9 +251,19 @@ constexpr bool IsDynamicCategory(const ::perfetto::DynamicCategory&) {
 #define PERFETTO_TRACK_EVENT_STATIC_STORAGE() \
   PERFETTO_TRACK_EVENT_STATIC_STORAGE_IN_NAMESPACE(perfetto)
 
-// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #if defined(__GNUC__) || defined(__clang__)
+#if defined(__clang__)
+#pragma clang diagnostic push
+// Fix 'error: #pragma system_header ignored in main file' for clang in Google3.
+#pragma clang diagnostic ignored "-Wpragma-system-header-outside-header"
+#endif
+
+// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #pragma GCC system_header
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 // Begin a slice under |category| with the title |name|. Both strings must be

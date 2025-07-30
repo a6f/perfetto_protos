@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "perfetto/ext/base/status_macros.h"
 #include "perfetto/ext/base/status_or.h"
 #include "src/base/test/status_matchers.h"
 #include "src/trace_processor/importers/common/args_tracker.h"
@@ -33,7 +34,6 @@
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/tables/track_tables_py.h"
 #include "src/trace_processor/types/variadic.h"
-#include "src/trace_processor/util/status_macros.h"
 #include "test/gtest_and_gmock.h"
 
 #include "protos/perfetto/common/perf_events.gen.h"
@@ -296,6 +296,9 @@ TEST_F(PerfSampleTrackerTest, FollowersTracks) {
     // Check the track exists and looks sensible.
     ASSERT_TRUE(rr.has_value());
 
+    std::string track_name =
+        context.storage->GetString(rr->name()).ToStdString();
+
     ASSERT_OK_AND_ASSIGN(auto perf_session_id,
                          GetDimension(*rr, "perf_session_id"));
     EXPECT_EQ(perf_session_id, Variadic::Integer(stream.perf_session_id.value));
@@ -304,11 +307,9 @@ TEST_F(PerfSampleTrackerTest, FollowersTracks) {
     EXPECT_EQ(cpu, Variadic::Integer(cpu_id));
 
     ASSERT_OK_AND_ASSIGN(auto is_timebase, GetArg(*rr, "is_timebase"));
-    EXPECT_EQ(is_timebase, Variadic::Boolean(true));
+    EXPECT_EQ(is_timebase, Variadic::Boolean(track_name == "leader"));
 
     // Using the config-supplied name for the track.
-    std::string track_name =
-        context.storage->GetString(rr->name()).ToStdString();
     ASSERT_EQ(track_name, track_names[i]);
   }
 }

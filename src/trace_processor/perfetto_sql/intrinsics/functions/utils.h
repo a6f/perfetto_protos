@@ -23,6 +23,7 @@
 #include "perfetto/base/compiler.h"
 #include "perfetto/ext/base/base64.h"
 #include "perfetto/ext/base/file_utils.h"
+#include "perfetto/ext/base/status_macros.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/trace_processor/demangle.h"
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
@@ -32,7 +33,6 @@
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/sql_function.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/util/regex.h"
-#include "src/trace_processor/util/status_macros.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -264,7 +264,7 @@ base::Status WriteFile::Run(TraceStorage*,
 
   out = SqlValue::Long(int_len);
 
-  return util::OkStatus();
+  return base::OkStatus();
 }
 
 struct ExtractArg : public SqlFunction {

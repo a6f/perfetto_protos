@@ -118,6 +118,7 @@
 #include "protos/perfetto/trace/ftrace/systrace.pbzero.h"
 #include "protos/perfetto/trace/ftrace/task.pbzero.h"
 #include "protos/perfetto/trace/ftrace/tcp.pbzero.h"
+#include "protos/perfetto/trace/ftrace/timer.pbzero.h"
 #include "protos/perfetto/trace/ftrace/trusty.pbzero.h"
 #include "protos/perfetto/trace/ftrace/ufs.pbzero.h"
 #include "protos/perfetto/trace/ftrace/vmscan.pbzero.h"
@@ -144,7 +145,7 @@ struct FtraceEventAndFieldId {
 // TODO(lalitm): going through this array is O(n) on a hot-path (see
 // ParseTypedFtraceToRaw). Consider changing this if we end up adding a lot of
 // events here.
-constexpr auto kKernelFunctionFields = std::array<FtraceEventAndFieldId, 6>{
+constexpr auto kKernelFunctionFields = std::array<FtraceEventAndFieldId, 7>{
     FtraceEventAndFieldId{
         protos::pbzero::FtraceEvent::kSchedBlockedReasonFieldNumber,
         protos::pbzero::SchedBlockedReasonFtraceEvent::kCallerFieldNumber},
@@ -162,7 +163,10 @@ constexpr auto kKernelFunctionFields = std::array<FtraceEventAndFieldId, 6>{
         protos::pbzero::FuncgraphExitFtraceEvent::kFuncFieldNumber},
     FtraceEventAndFieldId{
         protos::pbzero::FtraceEvent::kMmShrinkSlabStartFieldNumber,
-        protos::pbzero::MmShrinkSlabStartFtraceEvent::kShrinkFieldNumber}};
+        protos::pbzero::MmShrinkSlabStartFtraceEvent::kShrinkFieldNumber},
+    FtraceEventAndFieldId{
+        protos::pbzero::FtraceEvent::kHrtimerExpireEntryFieldNumber,
+        protos::pbzero::HrtimerExpireEntryFtraceEvent::kFunctionFieldNumber}};
 
 std::string GetUfsCmdString(uint32_t ufsopcode, uint32_t gid) {
   std::string buffer;
@@ -455,7 +459,13 @@ FtraceParser::FtraceParser(TraceProcessorContext* context)
       block_io_id_(context->storage->InternString("block_io")),
       block_io_arg_sector_id_(context->storage->InternString("sector")),
       cpuhp_action_cpu_id_(context->storage->InternString("action_cpu")),
-      cpuhp_idx_id_(context->storage->InternString("cpuhp_idx")) {
+      cpuhp_idx_id_(context->storage->InternString("cpuhp_idx")),
+      disp_vblank_irq_enable_id_(
+          context_->storage->InternString("disp_vblank_irq_enable")),
+      disp_vblank_irq_enable_output_id_arg_name_(
+          context_->storage->InternString("output_id")),
+      hrtimer_id_(context_->storage->InternString("hrtimer")),
+      local_timer_id_(context_->storage->InternString("IRQ (LocalTimer)")) {
   // Build the lookup table for the strings inside ftrace events (e.g. the
   // name of ftrace event fields and the names of their args).
   for (size_t i = 0; i < GetDescriptorsSize(); i++) {
@@ -971,6 +981,14 @@ base::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
         ParseWorkqueueExecuteEnd(ts, pid, fld_bytes);
         break;
       }
+      case FtraceEvent::kLocalTimerEntryFieldNumber: {
+        ParseLocalTimerEntry(cpu, ts);
+        break;
+      }
+      case FtraceEvent::kLocalTimerExitFieldNumber: {
+        ParseLocalTimerExit(cpu, ts);
+        break;
+      }
       case FtraceEvent::kIrqHandlerEntryFieldNumber: {
         ParseIrqHandlerEntry(cpu, ts, fld_bytes);
         break;
@@ -1025,6 +1043,14 @@ base::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
       }
       case FtraceEvent::kDpuTracingMarkWriteFieldNumber: {
         ParseDpuTracingMarkWrite(ts, pid, fld_bytes);
+        break;
+      }
+      case FtraceEvent::kDpuDispDpuUnderrunFieldNumber: {
+        ParseDpuDispDpuUnderrun(ts, fld_bytes);
+        break;
+      }
+      case FtraceEvent::kDpuDispVblankIrqEnableFieldNumber: {
+        ParseDpuDispVblankIrqEnable(ts, fld_bytes);
         break;
       }
       case FtraceEvent::kMaliTracingMarkWriteFieldNumber: {
@@ -1275,6 +1301,10 @@ base::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
         mali_gpu_event_tracker_.ParseMaliGpuMcuStateEvent(ts, fld.id());
         break;
       }
+      case FtraceEvent::kMaliGpuPowerStateFieldNumber: {
+        ParseMaliGpuPowerState(ts, fld_bytes);
+        break;
+      }
       case FtraceEvent::kTracingMarkWriteFieldNumber: {
         ParseMdssTracingMarkWrite(ts, pid, fld_bytes);
         break;
@@ -1353,6 +1383,14 @@ base::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
       }
       case FtraceEvent::kCpuhpExitFieldNumber: {
         ParseCpuhpExit(ts, fld_bytes);
+        break;
+      }
+      case FtraceEvent::kHrtimerExpireEntryFieldNumber: {
+        ParseHrtimerExpireEntry(cpu, ts, fld_bytes, seq_state);
+        break;
+      }
+      case FtraceEvent::kHrtimerExpireExitFieldNumber: {
+        ParseHrtimerExpireExit(cpu, ts, fld_bytes);
         break;
       }
       default:
@@ -1813,10 +1851,71 @@ void FtraceParser::ParseDpuTracingMarkWrite(int64_t timestamp,
     return;
   }
 
+  // b/395779936: there are drivers emitting events that pretend that the
+  // emitting thread is part of a different process, while using B/E/I/C events.
+  // We cannot trust those tid<->tgid associations, so override the tgid to 0 to
+  // rely on the existing swapper workarounds. Counter event parsing has
+  // existing workarounds for this scenario, so keep their tgid for backwards
+  // compatibility with existing queries.
+  char evt_type = static_cast<char>(evt.type());
   uint32_t tgid = static_cast<uint32_t>(evt.pid());
+  if (evt_type != 'C')
+    tgid = 0;
+
   SystraceParser::GetOrCreate(context_)->ParseKernelTracingMarkWrite(
-      timestamp, pid, static_cast<char>(evt.type()), false /*trace_begin*/,
-      evt.name(), tgid, evt.value());
+      timestamp, pid, evt_type, false /*trace_begin*/, evt.name(), tgid,
+      evt.value());
+}
+
+void FtraceParser::ParseDpuDispDpuUnderrun(int64_t timestamp, ConstBytes blob) {
+  protos::pbzero::DpuDispDpuUnderrunFtraceEvent::Decoder ex(blob);
+  static constexpr auto kBluePrint = tracks::SliceBlueprint(
+      "disp_dpu_underrun",
+      tracks::DimensionBlueprints(tracks::UintDimensionBlueprint("display_id")),
+      tracks::FnNameBlueprint([](uint32_t display_id) {
+        return base::StackString<256>("underrun[%u]", display_id);
+      }));
+
+  TrackId track_id = context_->track_tracker->InternTrack(
+      kBluePrint, tracks::Dimensions(ex.id()));
+  StringId slice_name_id =
+      context_->storage->InternString(base::StringView("disp_dpu_underrun"));
+
+  context_->slice_tracker->Scoped(
+      timestamp, track_id, kNullStringId, slice_name_id, 0,
+      [&](ArgsTracker::BoundInserter* inserter) {
+        inserter->AddArg(
+            context_->storage->InternString(base::StringView("vsync_count")),
+            Variadic::Integer(ex.vsync_count()));
+        inserter->AddArg(
+            context_->storage->InternString(base::StringView("pending_frame")),
+            Variadic::Integer(ex.frames_pending()));
+      });
+}
+
+void FtraceParser::ParseDpuDispVblankIrqEnable(int64_t timestamp,
+                                               ConstBytes blob) {
+  protos::pbzero::DpuDispVblankIrqEnableFtraceEvent::Decoder ex(blob);
+
+  static constexpr auto kBlueprint = tracks::SliceBlueprint(
+      "disp_vblank_irq_enable",
+      tracks::DimensionBlueprints(tracks::UintDimensionBlueprint("display_id")),
+      tracks::FnNameBlueprint([](uint32_t display_id) {
+        return base::StackString<256>("vblank_irq_en[%u]", display_id);
+      }));
+
+  TrackId track_id = context_->track_tracker->InternTrack(
+      kBlueprint, tracks::Dimensions(ex.id()));
+  if (ex.enable()) {
+    context_->slice_tracker->Begin(
+        timestamp, track_id, kNullStringId, disp_vblank_irq_enable_id_,
+        [&](ArgsTracker::BoundInserter* inserter) {
+          inserter->AddArg(disp_vblank_irq_enable_output_id_arg_name_,
+                           Variadic::Integer(ex.output_id()));
+        });
+  } else {
+    context_->slice_tracker->End(timestamp, track_id);
+  }
 }
 
 void FtraceParser::ParseG2dTracingMarkWrite(int64_t timestamp,
@@ -2659,6 +2758,18 @@ void FtraceParser::ParseIrqHandlerExit(uint32_t cpu,
                          Variadic::String(context_->storage->InternString(
                              evt.ret() == 1 ? "handled" : "unhandled")));
       });
+}
+
+void FtraceParser::ParseLocalTimerEntry(uint32_t cpu, int64_t timestamp) {
+  TrackId track = context_->track_tracker->InternTrack(kIrqBlueprint,
+                                                       tracks::Dimensions(cpu));
+  context_->slice_tracker->Begin(timestamp, track, irq_id_, local_timer_id_);
+}
+
+void FtraceParser::ParseLocalTimerExit(uint32_t cpu, int64_t timestamp) {
+  TrackId track = context_->track_tracker->InternTrack(kIrqBlueprint,
+                                                       tracks::Dimensions(cpu));
+  context_->slice_tracker->End(timestamp, track, irq_id_, {});
 }
 
 namespace {
@@ -3913,10 +4024,22 @@ void FtraceParser::ParseDeviceFrequency(int64_t ts,
                                         protozero::ConstBytes blob) {
   static constexpr auto kBlueprint = tracks::CounterBlueprint(
       "linux_device_frequency", tracks::UnknownUnitBlueprint(),
-      tracks::DimensionBlueprints(tracks::kLinuxDeviceDimensionBlueprint));
+      tracks::DimensionBlueprints(tracks::kLinuxDeviceDimensionBlueprint),
+      tracks::FnNameBlueprint([](base::StringView dev_name) {
+        // The dev_name as is is prepended with an address (e.g. 17000000a), so
+        // truncate that by searching for "devfreq_". This ensures that in all
+        // cases, the track name is prefixed with "devfreq_", such that track
+        // names will be in the form of "devfreq_bci", "devfreq_dsu", etc.
+        std::string device = dev_name.ToStdString();
+        auto position = device.find("devfreq_");
+        return (position == std::string::npos)
+                   ? base::StackString<255>("devfreq_%s", device.c_str())
+                   : base::StackString<255>("%s",
+                                            device.substr(position).c_str());
+      }));
   protos::pbzero::DevfreqFrequencyFtraceEvent::Decoder event(blob);
-  TrackId track_id =
-      context_->track_tracker->InternTrack(kBlueprint, {event.dev_name()});
+  TrackId track_id = context_->track_tracker->InternTrack(
+      kBlueprint, tracks::Dimensions(event.dev_name()));
   context_->event_tracker->PushCounter(ts, static_cast<double>(event.freq()),
                                        track_id);
 }
@@ -3924,10 +4047,13 @@ void FtraceParser::ParseDeviceFrequency(int64_t ts,
 void FtraceParser::ParseParamSetValueCpm(protozero::ConstBytes blob) {
   static constexpr auto kBlueprint = tracks::CounterBlueprint(
       "pixel_cpm_counters", tracks::UnknownUnitBlueprint(),
-      tracks::DimensionBlueprints(tracks::kNameFromTraceDimensionBlueprint));
+      tracks::DimensionBlueprints(tracks::kNameFromTraceDimensionBlueprint),
+      tracks::FnNameBlueprint([](base::StringView body) {
+        return base::StackString<255>("%.*s", int(body.size()), body.data());
+      }));
   protos::pbzero::ParamSetValueCpmFtraceEvent::Decoder event(blob);
-  TrackId track_id =
-      context_->track_tracker->InternTrack(kBlueprint, {event.body()});
+  TrackId track_id = context_->track_tracker->InternTrack(
+      kBlueprint, tracks::Dimensions(event.body()));
   context_->event_tracker->PushCounter(static_cast<int64_t>(event.timestamp()),
                                        event.value(), track_id);
 }
@@ -3971,7 +4097,7 @@ constexpr auto kCpuHpBlueprint = tracks::SliceBlueprint(
     tracks::FnNameBlueprint([](uint32_t cpu) {
       return base::StackString<255>("CPU Hotplug %u", cpu);
     }));
-}
+}  // namespace
 
 void FtraceParser::ParseCpuhpEnter(uint32_t fld_id,
                                    int64_t ts,
@@ -4019,5 +4145,53 @@ void FtraceParser::ParseCpuhpExit(int64_t ts, protozero::ConstBytes blob) {
   TrackId track_id = context_->track_tracker->InternTrack(
       kCpuHpBlueprint, tracks::Dimensions(cpuhp_event.cpu()));
   context_->slice_tracker->End(ts, track_id);
+}
+
+namespace {
+
+constexpr auto kHrtimerBlueprint = tracks::SliceBlueprint(
+    "cpu_hrtimer",
+    tracks::DimensionBlueprints(tracks::kCpuDimensionBlueprint),
+    tracks::FnNameBlueprint([](uint32_t cpu) {
+      return base::StackString<255>("Hrtimer Cpu %u", cpu);
+    }));
+
+}  // namespace
+
+void FtraceParser::ParseHrtimerExpireEntry(
+    uint32_t cpu,
+    int64_t timestamp,
+    protozero::ConstBytes blob,
+    PacketSequenceStateGeneration* seq_state) {
+  protos::pbzero::HrtimerExpireEntryFtraceEvent::Decoder evt(blob);
+
+  TrackId track = context_->track_tracker->InternTrack(kHrtimerBlueprint,
+                                                       tracks::Dimensions(cpu));
+  StringId slice_name_id =
+      InternedKernelSymbolOrFallback(evt.function(), seq_state);
+  context_->slice_tracker->Begin(timestamp, track, hrtimer_id_, slice_name_id);
+}
+
+void FtraceParser::ParseHrtimerExpireExit(uint32_t cpu,
+                                          int64_t timestamp,
+                                          protozero::ConstBytes blob) {
+  protos::pbzero::HrtimerExpireExitFtraceEvent::Decoder evt(blob);
+
+  TrackId track = context_->track_tracker->InternTrack(kHrtimerBlueprint,
+                                                       tracks::Dimensions(cpu));
+  context_->slice_tracker->End(timestamp, track, hrtimer_id_);
+}
+
+void FtraceParser::ParseMaliGpuPowerState(int64_t ts,
+                                          protozero::ConstBytes blob) {
+  static constexpr auto kMaliGpuPowerStateBlueprint = tracks::CounterBlueprint(
+      "mali_gpu_power_state", tracks::UnknownUnitBlueprint(),
+      tracks::DimensionBlueprints(),
+      tracks::StaticNameBlueprint("mali_gpu_power_state"));
+
+  protos::pbzero::MaliGpuPowerStateFtraceEvent::Decoder event(blob);
+  TrackId track =
+      context_->track_tracker->InternTrack(kMaliGpuPowerStateBlueprint);
+  context_->event_tracker->PushCounter(ts, event.to_state(), track);
 }
 }  // namespace perfetto::trace_processor

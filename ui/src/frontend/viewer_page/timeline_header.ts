@@ -24,7 +24,7 @@ import {TraceImpl} from '../../core/trace_impl';
 import {
   VirtualOverlayCanvas,
   VirtualOverlayCanvasDrawContext,
-} from '../../components/widgets/virtual_overlay_canvas';
+} from '../../widgets/virtual_overlay_canvas';
 import {TRACK_SHELL_WIDTH} from '../css_constants';
 import {NotesPanel} from './notes_panel';
 import {TickmarkPanel} from './tickmark_panel';
@@ -88,7 +88,9 @@ export class TimelineHeader implements m.ClassComponent<TimelineHeaderAttrs> {
       m(
         VirtualOverlayCanvas,
         {
-          raf: attrs.trace.raf,
+          onMount: (redrawCanvas) =>
+            attrs.trace.raf.addCanvasRedrawCallback(redrawCanvas),
+          disableCanvasRedrawOnMithrilUpdates: true,
           onCanvasRedraw: (ctx) => {
             const rect = new Rect2D({
               left: TRACK_SHELL_WIDTH,
@@ -151,6 +153,7 @@ export class TimelineHeader implements m.ClassComponent<TimelineHeaderAttrs> {
           minDistance: 1,
           cursorWhileDragging: 'text',
           onDrag: (e) => {
+            this.trace.raf.scheduleCanvasRedraw();
             const dragRect = Rect2D.fromPoints(e.dragStart, e.dragCurrent);
             const timeSpan = timescale
               .pxSpanToHpTimeSpan(dragRect)

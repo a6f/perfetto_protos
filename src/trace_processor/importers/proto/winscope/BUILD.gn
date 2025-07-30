@@ -14,6 +14,8 @@
 
 import("../../../../../gn/perfetto_cc_proto_descriptor.gni")
 
+assert(enable_perfetto_winscope)
+
 source_set("full") {
   sources = [
     "android_input_event_parser.cc",
@@ -28,12 +30,22 @@ source_set("full") {
     "shell_transitions_tracker.h",
     "surfaceflinger_layers_parser.cc",
     "surfaceflinger_layers_parser.h",
+    "surfaceflinger_layers_utils.h",
     "surfaceflinger_transactions_parser.cc",
     "surfaceflinger_transactions_parser.h",
     "viewcapture_args_parser.cc",
     "viewcapture_args_parser.h",
+    "viewcapture_parser.cc",
+    "viewcapture_parser.h",
+    "winscope_context.h",
+    "winscope_geometry.cc",
+    "winscope_geometry.h",
     "winscope_module.cc",
     "winscope_module.h",
+    "winscope_rect_tracker.cc",
+    "winscope_rect_tracker.h",
+    "winscope_transform_tracker.cc",
+    "winscope_transform_tracker.h",
   ]
   deps = [
     ":gen_cc_winscope_descriptor",
@@ -51,11 +63,11 @@ source_set("full") {
     "../../../storage",
     "../../../tables",
     "../../../types",
+    "../../../util:winscope_proto_mapping",
     "../../common",
     "../../common:parser_types",
     "../../proto:minimal",
     "../../proto:packet_sequence_state_generation_hdr",
-    "../../../util:winscope_proto_mapping"
   ]
 }
 

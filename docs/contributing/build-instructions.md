@@ -1,22 +1,23 @@
 # Perfetto build instructions
 
-The source of truth for the Perfetto codebase lives in AOSP:
-https://android.googlesource.com/platform/external/perfetto/
+The source of truth for the Perfetto codebase is
+https://github.com/google/perfetto.
 
-A read-only mirror is also available at https://github.com/google/perfetto .
+A copy is also available in the Android tree under /external/perfetto and is
+updated with the regular Android release cadence.
 
 Perfetto can be built both from the Android tree (AOSP) and standalone.
-Standalone builds are meant only for local testing and are not shipped.
+Standalone builds are meant only for local testing.
 Due to the reduced dependencies, the standalone workflow is faster to iterate on
 and the suggested way to work on Perfetto, unless you are working on code that
-has non-NDK depedencies into Android internals. Profilers and internal HAL/AIDL
+has non-NDK dependencies into Android internals. Profilers and internal HAL/AIDL
 dependencies will not be built in the standalone build.
 
-If you are chromium contributor, AOSP is still the place you should send CLs to.
+If you are chromium contributor, GitHub is the place you should send PRs to.
 The code inside chromium's
 [third_party/perfetto](https://source.chromium.org/chromium/chromium/src/+/main:third_party/perfetto/?q=f:third_party%2Fperfetto&ss=chromium)
 is a direct mirror of the AOSP repo. The
-[AOSP->Chromium autoroller](https://autoroll.skia.org/r/perfetto-chromium-autoroll)
+[GitHub->Chromium autoroller](https://autoroll.skia.org/r/perfetto-chromium-autoroll)
 takes care of keeping chromium's DEPS up to date.
 
 ## Standalone builds
@@ -24,7 +25,7 @@ takes care of keeping chromium's DEPS up to date.
 #### Get the code
 
 ```bash
-git clone https://android.googlesource.com/platform/external/perfetto/
+git clone https://github.com/google/perfetto
 ```
 
 #### Pull dependent libraries and toolchains
@@ -108,83 +109,6 @@ This will generate artifacts `out/target/product/XXX/system/`.
 
 Executables and shared libraries are stripped by default by the Android build
 system. The unstripped artifacts are kept into `out/target/product/XXX/symbols`.
-
-## UI development
-
-This command pulls the UI-related dependencies (notably, the NodeJS binary)
-and installs the `node_modules` in `ui/node_modules`:
-
-```bash
-tools/install-build-deps --ui
-```
-
-Build the UI:
-
-```bash
-# Will build into ./out/ui by default. Can be changed with --out path/
-# The final bundle will be available at ./ui/out/dist/.
-# The build script creates a symlink from ./ui/out to $OUT_PATH/ui/.
-ui/build
-```
-
-Test your changes on a local server using:
-
-```bash
-# This will automatically build the UI. There is no need to manually run
-# ui/build before running ui/run-dev-server.
-ui/run-dev-server
-```
-
-Navigate to http://localhost:10000/ to see the changes.
-
-The server supports live reloading of CSS and TS/JS contents. Whenever a ui
-source file is changed it, the script will automatically re-build it and show a
-prompt in the web page.
-
-UI unit tests are located next to the functionality being tested, and have
-`_unittest.ts` or `_jsdomtest.ts` suffixes. The following command runs all unit
-tests:
-
-```bash
-ui/run-unittests
-```
-
-This command will perform the build first; which is not necessary if you
-already have a development server running. In this case, to avoid interference
-with the rebuild done by development server and to get the results faster, you
-can use
-
-```bash
-ui/run-unittests --no-build
-```
-
-to skip the build steps.
-
-Script `ui/run-unittests` also supports `--watch` parameter, which would
-restart the testing when the underlying source files are changed. This can be
-used in conjunction with `--no-build`, and on its own as well.
-
-### Formatting & Linting
-
-We use `eslint` to lint TypeScript and JavaScript, and `prettier` to format
-TypeScript, JavaScript, and SCSS.
-
-To auto-format all source files, run ui/format-sources, which takes care of
-running both prettier and eslint on the changed files:
-
-```bash
-# By default it formats only files that changed from the upstream Git branch
-# (typicaly origin/main).
-# Pass --all for formatting all files under ui/src
-ui/format-sources
-```
-
-For VSCode users, we recommend using the eslint & prettier extensions to handle
-this entirely from within the IDE. See the
-[Useful Extensions](#useful-extensions) section on how to set this up.
-
-Presubmit checks require no formatting or linting issues, so fix all issues
-using the commands above before submitting a patch.
 
 ## Build files
 
@@ -520,16 +444,14 @@ In `.vscode/settings.json`:
   "C_Cpp.clang_format_sortIncludes": true,
   "files.exclude": {
     "out/*/obj": true,
-    "out/*/gen": true,
+    "out/*/gen": true
   },
   "clangd.arguments": [
     "--compile-commands-dir=${workspaceFolder}/out/mac_debug",
     "--completion-style=detailed",
     "--header-insertion=never"
   ],
-  "eslint.workingDirectories": [
-    "./ui",
-  ],
+  "eslint.workingDirectories": ["./ui"],
   "prettier.configPath": "ui/.prettierrc.yml",
   "typescript.preferences.importModuleSpecifier": "relative",
   "[typescript]": {
@@ -537,7 +459,7 @@ In `.vscode/settings.json`:
   },
   "[scss]": {
     "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
+  }
 }
 ```
 
@@ -556,10 +478,12 @@ Edit `.vscode/launch.json`:
       "type": "cppdbg",
       "name": "Perfetto unittests",
       "program": "${workspaceRoot}/out/mac_debug/perfetto_unittests",
-      "args": ["--gtest_filter=TracingServiceImplTest.StopTracingTriggerRingBuffer"],
+      "args": [
+        "--gtest_filter=TracingServiceImplTest.StopTracingTriggerRingBuffer"
+      ],
       "cwd": "${workspaceFolder}/out/mac_debug",
-      "MIMode": "lldb",
-    },
+      "MIMode": "lldb"
+    }
   ]
 }
 ```

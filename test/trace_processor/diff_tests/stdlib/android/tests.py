@@ -249,6 +249,24 @@ class AndroidStdlib(TestSuite):
         "Handler: com.android.systemui.broadcast.ActionReceiver"
         "Handler: com.android.keyguard.KeyguardUpdateMonitor"
         "Handler: com.android.systemui.qs.TileServiceManager"
+        "FrameBuffer-<num>#invokeListeners-non-direct"
+        "Transaction (ptz-fgd-1-LOCAL_MEDIA_REMOVE_DELETED_ITEMS_SYNC, <...>)"
+        "InputConsumer processing on ClientState<...>"
+        "InputConsumer processing on [Gesture Monitor] swipe-up (0x<num>)"
+        "+job=<num>:"com.google.android.apps.internal.betterbug""
+        "Looper.dispatch: android.app.ActivityThread$H(runnable@<num>(android.app.ActivityThread@<num>,<num>))"
+        "Not changed at ALL 0"
+        "Three digits to replace <num> <num>"
+        "kworker/<num>"
+        "<num>"
+        "<num> SurfaceView[com.google.android.apps.maps/com.google.android.maps.MapsActivity]#1(BLAST Consumer)1"
+        "1 2 3 4"
+        "0x<num>"
+        "ImageDecoder#decodeDrawable"
+        "+state=<num>:"sensor:0x<num>""
+        "[<num>]< SET_SIGNAL_STRENGTH_REPORTING_CRITERIA"
+        "sendMessage(inputChannel=<num> PopupWindow:<num>, seq=0x<num>, type=FOCUS)"
+        "Over the RR duration: timestamp:<num>,signalTime:<num>,VSyncPeriod:<num>,desiredVsyncPeriod:<num>,transientDuration:1"
         """))
 
   def test_monitor_contention_extraction(self):
@@ -579,6 +597,7 @@ class AndroidStdlib(TestSuite):
         SELECT
           aidl_name,
           interface,
+          method_name,
           client_process,
           server_process,
           client_thread,
@@ -606,17 +625,17 @@ class AndroidStdlib(TestSuite):
         LIMIT 10;
       """,
         out=Csv("""
-        "aidl_name","interface","client_process","server_process","client_thread","client_tid","server_tid","is_main_thread","client_oom_score","server_oom_score","client_ts","server_ts","client_dur","server_dur","client_monotonic_dur","server_monotonic_dur","aidl_ts","aidl_dur","is_sync","client_package_version_code","server_package_version_code","is_client_package_debuggable","is_server_package_debuggable"
-        "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736110278076,1736110435876,765487,462664,765487,462664,1736110692464,135281,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736111274404,1736111340019,481038,361607,481038,361607,1736111417370,249758,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736111874030,1736111923740,254494,159330,254494,159330,1736111994038,64535,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736112257185,1736112301639,309870,220751,309870,220751,1736112361927,133727,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::IPackageManager::isProtectedBroadcast::server","IPackageManager","com.android.systemui","system_server","ndroid.systemui",1253,657,1,-800,-900,1737108493015,1737125387579,17949987,163732,17949987,163732,1737125511194,24959,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::IActivityManager::checkPermission::server","IActivityManager","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737110161286,1737110746980,12677155,147315,12677155,147315,1737110799860,75563,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737123460104,1737123475761,447621,137704,447621,137704,1737123532124,48775,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737123982140,1737123994640,191006,164185,191006,164185,1737124033555,109797,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737124228451,1737124238356,88522,66721,88522,66721,1737124269922,24911,1,33,"[NULL]",0,"[NULL]"
-        "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737124369273,1737124378273,957260,95254,957260,95254,1737124406331,54810,1,33,"[NULL]",0,"[NULL]"
+                "aidl_name","interface","method_name","client_process","server_process","client_thread","client_tid","server_tid","is_main_thread","client_oom_score","server_oom_score","client_ts","server_ts","client_dur","server_dur","client_monotonic_dur","server_monotonic_dur","aidl_ts","aidl_dur","is_sync","client_package_version_code","server_package_version_code","is_client_package_debuggable","is_server_package_debuggable"
+                "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","getMobileIfaces","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736110278076,1736110435876,765487,462664,765487,462664,1736110692464,135281,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","getIfaceStats","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736111274404,1736111340019,481038,361607,481038,361607,1736111417370,249758,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","getMobileIfaces","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736111874030,1736111923740,254494,159330,254494,159330,1736111994038,64535,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","getIfaceStats","com.android.phone","system_server","m.android.phone",1469,657,1,-800,-900,1736112257185,1736112301639,309870,220751,309870,220751,1736112361927,133727,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::IPackageManager::isProtectedBroadcast::server","IPackageManager","isProtectedBroadcast","com.android.systemui","system_server","ndroid.systemui",1253,657,1,-800,-900,1737108493015,1737125387579,17949987,163732,17949987,163732,1737125511194,24959,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::IActivityManager::checkPermission::server","IActivityManager","checkPermission","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737110161286,1737110746980,12677155,147315,12677155,147315,1737110799860,75563,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","getMobileIfaces","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737123460104,1737123475761,447621,137704,447621,137704,1737123532124,48775,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","getIfaceStats","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737123982140,1737123994640,191006,164185,191006,164185,1737124033555,109797,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getMobileIfaces::server","INetworkStatsService","getMobileIfaces","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737124228451,1737124238356,88522,66721,88522,66721,1737124269922,24911,1,33,"[NULL]",0,"[NULL]"
+                "AIDL::java::INetworkStatsService::getIfaceStats::server","INetworkStatsService","getIfaceStats","com.android.phone","system_server","m.android.phone",1469,2721,1,-800,-900,1737124369273,1737124378273,957260,95254,957260,95254,1737124406331,54810,1,33,"[NULL]",0,"[NULL]"
         """))
 
   def test_binder_outgoing_graph(self):
@@ -1396,7 +1415,6 @@ class AndroidStdlib(TestSuite):
         "1ef76b0","android.intent.action.PACKAGE_ADDED","system",2519,"d43f45d",0,91360396877398,107502
         """))
 
-
   def test_binder_breakdown(self):
     return DiffTestBlueprint(
         trace=DataPath('sched_wakeup_trace.atr'),
@@ -1426,27 +1444,27 @@ class AndroidStdlib(TestSuite):
         trace=DataPath('sched_wakeup_trace.atr'),
         query="""
         INCLUDE PERFETTO MODULE android.binder_breakdown;
-        SELECT reason, SUM(dur) as dur
+        SELECT reason, reason_type, SUM(dur) as dur
         FROM android_binder_client_server_breakdown
-        GROUP BY reason
+        GROUP BY reason, reason_type
         ORDER BY dur
         """,
         out=Csv("""
-        "reason","dur"
-        "D (client)",10027
-        "D (server)",538747
-        "io (server)",705773
-        "art_lock_contention (server)",9500403
-        "Running (client)",16251671
-        "R+ (client)",35969495
-        "R (server)",73026825
-        "monitor_contention (server)",76505897
-        "R+ (server)",96093319
-        "S (client)",97692288
-        "R (client)",125510991
-        "Running (server)",584323718
-        "binder (server)",2106016239
-        "S (server)",2122622385
+        "reason","reason_type","dur"
+        "D","client",10027
+        "D","server",538747
+        "io","server",705773
+        "art_lock_contention","server",9500403
+        "Running","client",16251671
+        "R+","client",35969495
+        "R","server",73026825
+        "monitor_contention","server",76505897
+        "R+","server",96093319
+        "S","client",97692288
+        "R","client",125510991
+        "Running","server",584323718
+        "binder","server",2106016239
+        "S","server",2122622385
         """))
 
   def test_android_charging_states_output(self):
@@ -1562,3 +1580,25 @@ class AndroidStdlib(TestSuite):
 416753734715,129444346,53,"@androidx.work.systemjobscheduler@com.android.providers.media.module/androidx.work.impl.background.systemjob.SystemJobService_-2746960329031286781",10090,-2746960329031286781,129444346,"com.android.providers.media.module","androidx.work.systemjobscheduler","Charging","Unknown",400,1,0,0,0,0,0,0,0,0,0,0,0,400,"EXEMPTED",0,0,0,0,0,5,0,"PROCESS_STATE_PERSISTENT","INTERNAL_STOP_REASON_SUCCESSFUL_FINISH","STOP_REASON_UNDEFINED"
 422530232411,86735906,59,"@androidx.work.systemjobscheduler@com.android.providers.media.module/androidx.work.impl.background.systemjob.SystemJobService_-2746960329031286780",10090,-2746960329031286780,86735906,"com.android.providers.media.module","androidx.work.systemjobscheduler","Charging","Unknown",400,1,0,0,0,0,0,0,0,0,0,0,0,400,"EXEMPTED",0,0,0,0,0,3,0,"PROCESS_STATE_PERSISTENT","INTERNAL_STOP_REASON_SUCCESSFUL_FINISH","STOP_REASON_UNDEFINED"
       """))
+
+  def test_android_kernel_wakelocks(self):
+    return DiffTestBlueprint(
+        trace=Path('android_kernel_wakelocks.textproto'),
+        query="""
+          INCLUDE PERFETTO MODULE android.kernel_wakelocks;
+
+          SELECT *
+          FROM android_kernel_wakelocks;
+        """,
+        out=Csv("""
+"ts","dur","awake_dur","name","type","held_dur","held_ratio"
+100000000000,5000000000,5000000000,"kernel_wakelock_1","kernel",1000000,0.000200
+100000000000,5000000000,5000000000,"kernel_wakelock_3","kernel",3000000,0.000600
+100000000000,5000000000,5000000000,"native_wakelock_2","native",2000000,0.000400
+105000000000,5000000000,2000000000,"kernel_wakelock_1","kernel",10000000,0.005000
+105000000000,5000000000,2000000000,"kernel_wakelock_3","kernel",0,0.000000
+105000000000,5000000000,2000000000,"native_wakelock_2","native",0,0.000000
+110000000000,5000000000,5000000000,"kernel_wakelock_1","kernel",100000000,0.020000
+110000000000,5000000000,5000000000,"kernel_wakelock_3","kernel",300000000,0.060000
+110000000000,5000000000,5000000000,"native_wakelock_2","native",200000000,0.040000
+        """))

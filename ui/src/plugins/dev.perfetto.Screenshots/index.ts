@@ -16,7 +16,7 @@ import {TrackNode} from '../../public/workspace';
 import {NUM} from '../../trace_processor/query_result';
 import {Trace} from '../../public/trace';
 import {PerfettoPlugin} from '../../public/plugin';
-import {ScreenshotsTrack} from './screenshots_track';
+import {createScreenshotsTrack} from './screenshots_track';
 
 export default class implements PerfettoPlugin {
   static readonly id = 'dev.perfetto.Screenshots';
@@ -30,17 +30,16 @@ export default class implements PerfettoPlugin {
     const {count} = res.firstRow({count: NUM});
 
     if (count > 0) {
-      const title = 'Screenshots';
       const uri = '/screenshots';
       ctx.tracks.registerTrack({
         uri,
-        title,
-        track: new ScreenshotsTrack(ctx, uri),
-        tags: {
-          kind: ScreenshotsTrack.kind,
-        },
+        renderer: createScreenshotsTrack(ctx, uri),
       });
-      const trackNode = new TrackNode({uri, title, sortOrder: -60});
+      const trackNode = new TrackNode({
+        uri,
+        name: 'Screenshots',
+        sortOrder: -60,
+      });
       ctx.workspace.addChildInOrder(trackNode);
     }
   }

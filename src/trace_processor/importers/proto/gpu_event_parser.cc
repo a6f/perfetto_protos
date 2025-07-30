@@ -172,19 +172,18 @@ void GpuEventParser::ParseGpuCounterEvent(int64_t ts, ConstBytes blob) {
 
     auto counter_id = spec.counter_id();
     auto name = spec.name();
-    if (gpu_counter_track_ids_.find(counter_id) ==
-        gpu_counter_track_ids_.end()) {
+    if (!gpu_counter_state_.Find(counter_id)) {
       auto desc = spec.description();
 
       StringId unit_id = kNullStringId;
       if (spec.has_numerator_units() || spec.has_denominator_units()) {
         char buffer[1024];
         base::StringWriter unit(buffer, sizeof(buffer));
-        for (auto numer = spec.numerator_units(); numer; ++numer) {
+        for (auto number = spec.numerator_units(); number; ++number) {
           if (unit.pos()) {
             unit.AppendChar(':');
           }
-          unit.AppendInt(*numer);
+          unit.AppendInt(*number);
         }
         char sep = '/';
         for (auto denom = spec.denominator_units(); denom; ++denom) {
@@ -205,7 +204,9 @@ void GpuEventParser::ParseGpuCounterEvent(int64_t ts, ConstBytes blob) {
             inserter.AddArg(description_id_, Variadic::String(desc_id));
           },
           tracks::DynamicUnit(unit_id));
-      gpu_counter_track_ids_.emplace(counter_id, track_id);
+      auto [cit, inserted] =
+          gpu_counter_state_.Insert(counter_id, GpuCounterState{track_id, {}});
+      PERFETTO_CHECK(inserted);
       if (spec.has_groups()) {
         for (auto group = spec.groups(); group; ++group) {
           tables::GpuCounterGroupTable::Row row;
@@ -231,17 +232,20 @@ void GpuEventParser::ParseGpuCounterEvent(int64_t ts, ConstBytes blob) {
     GpuCounterEvent::GpuCounter::Decoder counter(*it);
     if (counter.has_counter_id() &&
         (counter.has_int_value() || counter.has_double_value())) {
-      auto counter_id = counter.counter_id();
-      // Check missing counter_id
-      if (gpu_counter_track_ids_.find(counter_id) ==
-          gpu_counter_track_ids_.end()) {
+      auto* state = gpu_counter_state_.Find(counter.counter_id());
+      if (!state) {
         continue;
       }
       double counter_val = counter.has_int_value()
                                ? static_cast<double>(counter.int_value())
                                : counter.double_value();
-      context_->event_tracker->PushCounter(ts, counter_val,
-                                           gpu_counter_track_ids_[counter_id]);
+      auto id = context_->event_tracker->PushCounter(ts, 0, state->track_id);
+      if (state->last_id) {
+        auto row = context_->storage->mutable_counter_table()->FindById(
+            *state->last_id);
+        row->set_value(counter_val);
+      }
+      state->last_id = id;
     }
   }
 }
@@ -407,9 +411,11 @@ void GpuEventParser::ParseGpuRenderStageEvent(
           tracks::Dimensions("iid", hw_queue_id, decoder->name()),
           tracks::DynamicName(context_->storage->InternString(decoder->name())),
           [&, this](ArgsTracker::BoundInserter& inserter) {
-            inserter.AddArg(description_id_,
-                            Variadic::String(context_->storage->InternString(
-                                decoder->description())));
+            if (decoder->description().size > 0) {
+              inserter.AddArg(description_id_,
+                              Variadic::String(context_->storage->InternString(
+                                  decoder->description())));
+            }
           });
     } else {
       hw_queue_id = static_cast<uint32_t>(event.hw_queue_id());
@@ -457,13 +463,8 @@ void GpuEventParser::ParseGpuRenderStageEvent(
                                       ? context_->storage->InternString(
                                             command_buffer_name.value().c_str())
                                       : kNullStringId;
-    StringId name_id;
-    if (event.has_submission_id()) {
-      name_id = context_->storage->InternString(
-          std::to_string(event.submission_id()).c_str());
-    } else {
-      name_id = GetFullStageName(sequence_state, event);
-    }
+    StringId name_id = GetFullStageName(sequence_state, event);
+
     context_->slice_tracker->Scoped(
         ts, track_id, kNullStringId, name_id,
         static_cast<int64_t>(event.duration()),

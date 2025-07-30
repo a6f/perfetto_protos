@@ -45,22 +45,16 @@ struct FtraceStats;
 // Method of last resort to reset ftrace state.
 bool HardResetFtraceState();
 
-// Stores the a snapshot of the timestamps from ftrace's trace clock
-// and CLOCK_BOOTITME.
+// Responsible for controlling the kernel ftrace tracing filesystem (i.e. the
+// root tracefs directory at /sys/kernel/tracing/). Records ftrace data as
+// possibly-concurrent data sources are started and stopped, overlaying their
+// configurations onto a single shared kernel instance.
 //
-// This is used when the "boot" (i.e. CLOCK_BOOTITME) is not available
-// for timestamping trace events (on Android O- and 3.x Linux kernels).
-// Trace processor can use this data to sync clocks just as it would
-// with ClockSnapshot packets.
-struct FtraceClockSnapshot {
-  // The timestamp according to the ftrace clock.
-  int64_t ftrace_clock_ts = 0;
-
-  // The timestamp according to CLOCK_BOOTTIME.
-  int64_t boot_clock_ts = 0;
-};
-
-// Utility class for controlling ftrace.
+// Makes use of the following notable classes:
+// * FtraceConfigMuxer for unioning multiple tracing configs.
+// * CpuReader for consuming the kernel ring buffer ftrace data and serialising
+//   it as perfetto protobuf tracing packets.
+// * ProtoTranslationTable for mapping events from binary to protobuf formats.
 class FtraceController {
  public:
   class Observer {
@@ -72,6 +66,9 @@ class FtraceController {
   // The passed Observer must outlive the returned FtraceController instance.
   static std::unique_ptr<FtraceController> Create(base::TaskRunner*, Observer*);
   virtual ~FtraceController();
+
+  FtraceController(const FtraceController&) = delete;
+  FtraceController& operator=(const FtraceController&) = delete;
 
   bool AddDataSource(FtraceDataSource*) PERFETTO_WARN_UNUSED_RESULT;
   bool StartDataSource(FtraceDataSource*);
@@ -115,11 +112,14 @@ class FtraceController {
     std::unique_ptr<FtraceConfigMuxer> ftrace_config_muxer;
     std::vector<CpuReader> cpu_readers;  // empty if no started data sources
     std::set<FtraceDataSource*> started_data_sources;
+    // for snapshotting ftrace clock if not using "boot":
+    base::ScopedFile cpu_zero_stats_fd;
+    // for reading based on ring buffer capacity:
     bool buffer_watches_posted = false;
   };
 
   FtraceInstanceState* GetInstance(const std::string& instance_name);
-  // TODO(rsavitski): figure out a better testing shim.
+  // virtual for testing:
   virtual std::unique_ptr<FtraceInstanceState> CreateSecondaryInstance(
       const std::string& instance_name);
 
@@ -131,9 +131,6 @@ class FtraceController {
   friend class TestFtraceController;
   enum class PollSupport { kUntested, kSupported, kUnsupported };
 
-  FtraceController(const FtraceController&) = delete;
-  FtraceController& operator=(const FtraceController&) = delete;
-
   // Periodic task that reads all per-cpu ftrace buffers. Global across tracefs
   // instances.
   void ReadTick(int generation);
@@ -142,7 +139,7 @@ class FtraceController {
   // Optional: additional reads based on buffer capacity. Per tracefs instance.
   void UpdateBufferWatermarkWatches(FtraceInstanceState* instance,
                                     const std::string& instance_name);
-  void OnBufferPastWatermark(std::string instance_name,
+  void OnBufferPastWatermark(const std::string& instance_name,
                              size_t cpu,
                              bool repoll_watermark);
   void RemoveBufferWatermarkWatches(FtraceInstanceState* instance);
@@ -158,7 +155,8 @@ class FtraceController {
   void DestroyIfUnusedSeconaryInstance(FtraceInstanceState* instance);
 
   size_t GetStartedDataSourcesCount();
-  void MaybeSnapshotFtraceClock();  // valid only for primary_ tracefs instance
+  std::optional<CpuReader::FtraceClockSnapshot> SnapshotFtraceClockIfNotBoot(
+      FtraceInstanceState* instance);
 
   template <typename F /* void(FtraceInstanceState*) */>
   void ForEachInstance(F fn);
@@ -181,15 +179,10 @@ class FtraceController {
   std::map<std::string, std::unique_ptr<FtraceInstanceState>>
       secondary_instances_;
 
-  // Additional state for snapshotting non-boot ftrace clock, specific to the
-  // primary_ instance:
-  base::ScopedFile cpu_zero_stats_fd_;
-  FtraceClockSnapshot ftrace_clock_snapshot_;
-
   base::WeakPtrFactory<FtraceController> weak_factory_;  // Keep last.
 };
 
-bool DumpKprobeStats(const std::string& text, FtraceStats* ftrace_stats);
+bool DumpKprobeStats(std::string text, FtraceStats* ftrace_stats);
 
 }  // namespace perfetto
 

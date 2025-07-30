@@ -21,8 +21,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "perfetto/base/logging.h"
@@ -31,17 +31,23 @@
 #include "perfetto/ext/base/status_or.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/containers/string_pool.h"
+#include "src/trace_processor/dataframe/dataframe.h"
 #include "src/trace_processor/db/runtime_table.h"
 #include "src/trace_processor/db/table.h"
+#include "src/trace_processor/perfetto_sql/engine/dataframe_module.h"
+#include "src/trace_processor/perfetto_sql/engine/dataframe_shared_storage.h"
 #include "src/trace_processor/perfetto_sql/engine/runtime_table_function.h"
+#include "src/trace_processor/perfetto_sql/engine/static_table_function_module.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/functions/sql_function.h"
 #include "src/trace_processor/perfetto_sql/intrinsics/table_functions/static_table_function.h"
 #include "src/trace_processor/perfetto_sql/parser/function_util.h"
 #include "src/trace_processor/perfetto_sql/parser/perfetto_sql_parser.h"
 #include "src/trace_processor/perfetto_sql/preprocessor/perfetto_sql_preprocessor.h"
+#include "src/trace_processor/sqlite/bindings/sqlite_module.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_result.h"
 #include "src/trace_processor/sqlite/bindings/sqlite_window_function.h"
 #include "src/trace_processor/sqlite/db_sqlite_table.h"
+#include "src/trace_processor/sqlite/module_state_manager.h"
 #include "src/trace_processor/sqlite/sql_source.h"
 #include "src/trace_processor/sqlite/sqlite_engine.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
@@ -64,8 +70,33 @@ class PerfettoSqlEngine {
     SqliteEngine::PreparedStatement stmt;
     ExecutionStats stats;
   };
+  struct LegacyStaticTable {
+    Table* table;
+    std::string name;
+    Table::Schema schema;
+  };
+  struct UnfinalizedStaticTable {
+    dataframe::Dataframe* dataframe;
+    std::string name;
+  };
+  struct FinalizedStaticTable {
+    DataframeSharedStorage::DataframeHandle handle;
+    std::string name;
+  };
+  PerfettoSqlEngine(StringPool* pool,
+                    DataframeSharedStorage* storage,
+                    bool enable_extra_checks);
 
-  PerfettoSqlEngine(StringPool* pool, bool enable_extra_checks);
+  // Initializes the static tables and functions in the engine.
+  base::Status InitializeStaticTablesAndFunctions(
+      const std::vector<LegacyStaticTable>& legacy_tables,
+      const std::vector<UnfinalizedStaticTable>& unfinalized_tables,
+      std::vector<FinalizedStaticTable> finalized_tables,
+      std::vector<std::unique_ptr<StaticTableFunction>> functions);
+
+  // Finalizes all the static tables owned by this engine and makes them
+  // sharable in the `DataframeSharedStorage` passed in the constructor.
+  void FinalizeAndShareAllStaticTables();
 
   // Executes all the statements in |sql| and returns a |ExecutionResult|
   // object. The metadata will reference all the statements executed and the
@@ -91,6 +122,50 @@ class PerfettoSqlEngine {
   // no valid SQL to run.
   base::StatusOr<SqliteEngine::PreparedStatement> PrepareSqliteStatement(
       SqlSource sql);
+
+  // Registers a virtual table module with the given name.
+  //
+  // |name|: name of the module in SQL.
+  // |ctx|:  context object for the module. This object *must* outlive the
+  //         module so should likely be either static or scoped to the lifetime
+  //         of TraceProcessor.
+  template <typename Module>
+  void RegisterVirtualTableModule(const char* name,
+                                  typename Module::Context* ctx) {
+    static_assert(std::is_base_of_v<sqlite::Module<Module>, Module>,
+                  "Must subclass sqlite::Module");
+    // If the context class of the module inherits from
+    // ModuleStateManagerBase, we need to add it to the list of virtual module
+    // state managers so it receives the OnCommit/OnRollback callbacks.
+    if constexpr (std::is_base_of_v<sqlite::ModuleStateManagerBase,
+                                    typename Module::Context>) {
+      virtual_module_state_managers_.push_back(ctx);
+    }
+    engine_->RegisterVirtualTableModule(name, &Module::kModule, ctx, nullptr);
+  }
+
+  // Registers a virtual table module with the given name.
+  //
+  // |name|: name of the module in SQL.
+  // |ctx|:  context object for the module. The lifetime of the context object
+  //         is managed by SQLite.
+  template <typename Module>
+  void RegisterVirtualTableModule(
+      const char* name,
+      std::unique_ptr<typename Module::Context> ctx) {
+    static_assert(std::is_base_of_v<sqlite::Module<Module>, Module>,
+                  "Must subclass sqlite::Module");
+    // If the context class of the module inherits from
+    // ModuleStateManagerBase, we need to add it to the list of virtual module
+    // state managers so it receives the OnCommit/OnRollback callbacks.
+    if constexpr (std::is_base_of_v<sqlite::ModuleStateManagerBase,
+                                    typename Module::Context>) {
+      virtual_module_state_managers_.push_back(ctx.get());
+    }
+    engine_->RegisterVirtualTableModule(
+        name, &Module::kModule, ctx.release(),
+        [](void* ptr) { delete static_cast<typename Module::Context*>(ptr); });
+  }
 
   // Registers a trace processor C++ function to be runnable from SQL.
   //
@@ -177,20 +252,11 @@ class PerfettoSqlEngine {
   // of |return_type| and is implemented by executing the SQL statement |sql|.
   base::Status RegisterRuntimeFunction(bool replace,
                                        const FunctionPrototype& prototype,
-                                       const std::string& return_type,
+                                       sql_argument::Type return_type,
                                        SqlSource sql);
 
   // Enables memoization for the given SQL function.
   base::Status EnableSqlFunctionMemoization(const std::string& name);
-
-  // Registers a trace processor C++ table with SQLite with an SQL name of
-  // |name|.
-  void RegisterStaticTable(Table*,
-                           const std::string& name,
-                           Table::Schema schema);
-
-  // Registers a trace processor C++ table function with SQLite.
-  void RegisterStaticTableFunction(std::unique_ptr<StaticTableFunction> fn);
 
   SqliteEngine* sqlite_engine() { return engine_.get(); }
 
@@ -216,7 +282,9 @@ class PerfettoSqlEngine {
         "UNION ALL SELECT * FROM sqlite_temp_master)";
     auto stmt = ExecuteUntilLastStatement(
         SqlSource::FromTraceProcessorImplementation(kAllTablesQuery));
-    PERFETTO_CHECK(stmt.ok());
+    if (!stmt.ok()) {
+      PERFETTO_FATAL("%s", stmt.status().c_message());
+    }
     uint32_t query_count =
         static_cast<uint32_t>(sqlite3_column_int(stmt->stmt.sqlite_stmt(), 0));
     PERFETTO_CHECK(!stmt->stmt.Step());
@@ -230,14 +298,27 @@ class PerfettoSqlEngine {
   }
 
   // Find table (Static or Runtime) registered with engine with provided name.
-  const Table* GetTableOrNull(std::string_view name) const {
+  const Table* GetTableOrNull(const std::string& name) const {
     if (const auto* r = GetRuntimeTableOrNull(name); r) {
       return r;
     }
     return GetStaticTableOrNull(name);
   }
 
+  // Find dataframe registered with engine with provided name.
+  const dataframe::Dataframe* GetDataframeOrNull(const std::string& name) const;
+
  private:
+  using UnfinalizedOrFinalizedStaticTable =
+      std::variant<DataframeSharedStorage::DataframeHandle,
+                   dataframe::Dataframe*>;
+  void RegisterStaticTable(UnfinalizedOrFinalizedStaticTable,
+                           const std::string&);
+  void RegisterStaticTableUsingTable(Table* table,
+                                     const std::string& name,
+                                     Table::Schema schema);
+  void RegisterStaticTableFunction(std::unique_ptr<StaticTableFunction> fn);
+
   base::Status ExecuteCreateFunction(const PerfettoSqlParser::CreateFunction&);
 
   base::Status ExecuteInclude(const PerfettoSqlParser::Include&,
@@ -253,7 +334,23 @@ class PerfettoSqlEngine {
 
   base::Status ExecuteCreateIndex(const PerfettoSqlParser::CreateIndex&);
 
+  base::Status DropIndexBeforeCreate(const PerfettoSqlParser::CreateIndex&);
+
+  static base::Status ExecuteCreateIndexUsingTable(
+      const PerfettoSqlParser::CreateIndex&,
+      Table&);
+
   base::Status ExecuteDropIndex(const PerfettoSqlParser::DropIndex&);
+
+  static base::Status ExecuteDropIndexUsingTable(
+      const PerfettoSqlParser::DropIndex&,
+      Table&);
+
+  base::Status ExecuteCreateTableUsingRuntimeTable(
+      const PerfettoSqlParser::CreateTable& create_table,
+      SqliteEngine::PreparedStatement stmt,
+      const std::vector<std::string>& column_names,
+      const std::vector<sql_argument::ArgumentDefinition>& effective_schema);
 
   enum class CreateTableType {
     kCreateTable,
@@ -264,7 +361,8 @@ class PerfettoSqlEngine {
   };
   // |effective_schema| should have been normalised and its column order
   // should match |column_names|.
-  base::StatusOr<std::unique_ptr<RuntimeTable>> CreateTableImpl(
+  base::StatusOr<std::unique_ptr<RuntimeTable>>
+  CreateTableUsingRuntimeTableImpl(
       const char* tag,
       const std::string& name,
       SqliteEngine::PreparedStatement source,
@@ -279,23 +377,6 @@ class PerfettoSqlEngine {
       std::unique_ptr<typename Function::Context> ctx,
       bool deterministic = true);
 
-  // Get the column names from a statement.
-  // |tag| is used in the error message if the statement is invalid.
-  base::StatusOr<std::vector<std::string>> GetColumnNamesFromSelectStatement(
-      const SqliteEngine::PreparedStatement& stmt,
-      const char* tag) const;
-
-  // Validates that the column names in |column_names| match the |schema|.
-  // Given that PerfettoSQL supports an arbitrary order of columns in the
-  // schema, this function also normalises the schema by reordering the schema
-  // columns to match the order of columns in the query. |tag| is used in the
-  // error message if the statement is invalid.
-  base::StatusOr<std::vector<sql_argument::ArgumentDefinition>>
-  ValidateAndGetEffectiveSchema(
-      const std::vector<std::string>& column_names,
-      const std::vector<sql_argument::ArgumentDefinition>& schema,
-      const char* tag) const;
-
   // Given a package and a key, include the correct file(s) from the package.
   // The key can contain a wildcard to include all files in the module with the
   // matching prefix.
@@ -308,8 +389,23 @@ class PerfettoSqlEngine {
                                  const std::string& key,
                                  const PerfettoSqlParser&);
 
-  // Find table (Static or Runtime) registered with engine with provided name.
-  Table* GetTableOrNull(std::string_view name) {
+  // Called when a transaction is committed by SQLite; that is, the result of
+  // running some SQL is considered "perm".
+  //
+  // See https://www.sqlite.org/lang_transaction.html for an explanation of
+  // transactions in SQLite.
+  int OnCommit();
+
+  // Called when a transaction is rolled back by SQLite; that is, the result of
+  // of running some SQL should be discarded and the state of the database
+  // should be restored to the state it was in before the transaction was
+  // started.
+  //
+  // See https://www.sqlite.org/lang_transaction.html for an explanation of
+  // transactions in SQLite.
+  void OnRollback();
+
+  Table* GetTableOrNull(const std::string& name) {
     if (auto* maybe_runtime = GetRuntimeTableOrNull(name); maybe_runtime) {
       return maybe_runtime;
     }
@@ -317,31 +413,47 @@ class PerfettoSqlEngine {
   }
 
   // Find RuntimeTable registered with engine with provided name.
-  RuntimeTable* GetRuntimeTableOrNull(std::string_view);
+  RuntimeTable* GetRuntimeTableOrNull(const std::string&);
 
   // Find static table registered with engine with provided name.
-  Table* GetStaticTableOrNull(std::string_view);
+  Table* GetStaticTableOrNull(const std::string&);
 
   // Find RuntimeTable registered with engine with provided name.
-  const RuntimeTable* GetRuntimeTableOrNull(std::string_view) const;
+  const RuntimeTable* GetRuntimeTableOrNull(const std::string&) const;
 
   // Find static table registered with engine with provided name.
-  const Table* GetStaticTableOrNull(std::string_view) const;
+  const Table* GetStaticTableOrNull(const std::string&) const;
 
   StringPool* pool_ = nullptr;
+
+  // Storage for shared Dataframe objects.
+  //
+  // Note that this class can be shared between multiple PerfettoSqlEngine
+  // instances which are operating on different threads.
+  DataframeSharedStorage* dataframe_shared_storage_;
+
   // If true, engine will perform additional consistency checks when e.g.
   // creating tables and views.
   const bool enable_extra_checks_;
+
+  // A stack which keeps track of the modules which are being included. Used to
+  // know when dataframes should be shared.
+  std::vector<std::string> module_include_stack_;
 
   uint64_t static_function_count_ = 0;
   uint64_t static_aggregate_function_count_ = 0;
   uint64_t static_window_function_count_ = 0;
   uint64_t runtime_function_count_ = 0;
 
+  // Contains the pointers for all registered virtual table modules where the
+  // context class of the module inherits from ModuleStateManagerBase.
+  std::vector<sqlite::ModuleStateManagerBase*> virtual_module_state_managers_;
+
   RuntimeTableFunctionModule::Context* runtime_table_fn_context_ = nullptr;
   DbSqliteModule::Context* runtime_table_context_ = nullptr;
   DbSqliteModule::Context* static_table_context_ = nullptr;
-  DbSqliteModule::Context* static_table_fn_context_ = nullptr;
+  StaticTableFunctionModule::Context* static_table_fn_context_ = nullptr;
+  DataframeModule::Context* dataframe_context_ = nullptr;
   base::FlatHashMap<std::string, sql_modules::RegisteredPackage> packages_;
   base::FlatHashMap<std::string, PerfettoSqlPreprocessor::Macro> macros_;
   std::unique_ptr<SqliteEngine> engine_;

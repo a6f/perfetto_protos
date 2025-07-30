@@ -15,6 +15,7 @@
 import {assertExists, assertTrue} from '../base/logging';
 import {time, Time, TimeSpan} from '../base/time';
 import {cacheTrace} from './cache_manager';
+import {Cpu} from '../base/multi_machine_trace';
 import {
   getEnabledMetatracingCategories,
   isMetatracingEnabled,
@@ -237,6 +238,9 @@ async function loadTraceIntoEngine(
 
   decideTabs(trace);
 
+  updateStatus(app, `Loading minimap`);
+  await trace.minimap.load(traceDetails.start, traceDetails.end);
+
   // Trace Processor doesn't support the reliable range feature for JSON
   // traces.
   if (
@@ -406,15 +410,7 @@ async function getTraceInfo(
   // This is the offset between the unix epoch and ts in the ts domain.
   // I.e. the value of ts at the time of the unix epoch - usually some large
   // negative value.
-  const realtimeOffset = Time.sub(snapshot.ts, snapshot.clockValue);
-
-  // Find the previous closest midnight from the trace start time.
-  const utcOffset = Time.getLatestMidnight(traceTime.start, realtimeOffset);
-
-  const traceTzOffset = Time.getLatestMidnight(
-    traceTime.start,
-    Time.sub(realtimeOffset, Time.fromSeconds(tzOffMin * 60)),
-  );
+  const unixOffset = Time.sub(snapshot.ts, snapshot.clockValue);
 
   let traceTitle = '';
   let traceUrl = '';
@@ -463,9 +459,8 @@ async function getTraceInfo(
     ...traceTime,
     traceTitle,
     traceUrl,
-    realtimeOffset,
-    utcOffset,
-    traceTzOffset,
+    tzOffMin,
+    unixOffset,
     cpus: await getCpus(engine),
     importErrors: await getTraceErrors(engine),
     source: traceSource,
@@ -498,13 +493,17 @@ async function getTraceTimeBounds(engine: Engine): Promise<TimeSpan> {
 }
 
 // TODO(hjd): When streaming must invalidate this somehow.
-async function getCpus(engine: Engine): Promise<number[]> {
-  const cpus = [];
+async function getCpus(engine: Engine): Promise<Cpu[]> {
+  const cpus: Cpu[] = [];
   const queryRes = await engine.query(
-    'select distinct(cpu) as cpu from sched order by cpu;',
+    `select ucpu, cpu, ifnull(machine_id, 0) as machine from cpu`,
   );
-  for (const it = queryRes.iter({cpu: NUM}); it.valid(); it.next()) {
-    cpus.push(it.cpu);
+  for (
+    const it = queryRes.iter({ucpu: NUM, cpu: NUM, machine: NUM});
+    it.valid();
+    it.next()
+  ) {
+    cpus.push(new Cpu(it.ucpu, it.cpu, it.machine));
   }
   return cpus;
 }

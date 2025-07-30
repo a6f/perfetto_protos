@@ -107,11 +107,6 @@ export const COUNTER_TRACK_SCHEMAS: ReadonlyArray<CounterTrackTypeSchema> = [
     group: 'CPU Frequency Throttling',
   },
   {
-    type: 'cpu_idle_state',
-    topLevelGroup: 'CPU',
-    group: 'CPU Idle State',
-  },
-  {
     type: 'cpu_max_frequency_limit',
     topLevelGroup: 'CPU',
     group: 'CPU Max Frequency',
@@ -145,13 +140,6 @@ export const COUNTER_TRACK_SCHEMAS: ReadonlyArray<CounterTrackTypeSchema> = [
     type: 'diskstat',
     topLevelGroup: 'IO',
     group: 'Diskstat',
-  },
-  {
-    type: 'entity_state',
-    topLevelGroup: 'POWER',
-    group: 'Entity Residency',
-    shareYAxis: true,
-    mode: 'rate',
   },
   {
     type: 'f2fs_iostat_latency',
@@ -291,13 +279,8 @@ export const COUNTER_TRACK_SCHEMAS: ReadonlyArray<CounterTrackTypeSchema> = [
     group: undefined,
   },
   {
-    type: 'perf_counter',
-    topLevelGroup: 'HARDWARE',
-    group: 'perf counters',
-  },
-  {
     type: 'pixel_cpm_counters',
-    topLevelGroup: 'THERMALS',
+    topLevelGroup: 'HARDWARE',
     group: 'CPM Counters',
   },
   {
@@ -340,8 +323,8 @@ export const COUNTER_TRACK_SCHEMAS: ReadonlyArray<CounterTrackTypeSchema> = [
   },
   {
     type: 'smaps',
-    topLevelGroup: 'MEMORY',
-    group: 'smaps',
+    topLevelGroup: 'PROCESS',
+    group: undefined,
   },
   {
     type: 'sysprop_counter',

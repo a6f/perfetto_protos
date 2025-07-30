@@ -65,6 +65,7 @@
 
 namespace perfetto::trace_processor {
 namespace {
+
 using ::testing::_;
 using ::testing::Args;
 using ::testing::AtLeast;
@@ -81,6 +82,7 @@ using ::testing::Pointwise;
 using ::testing::Return;
 using ::testing::ReturnRef;
 using ::testing::UnorderedElementsAreArray;
+
 class MockSchedEventTracker : public FtraceSchedEventTracker {
  public:
   explicit MockSchedEventTracker(TraceProcessorContext* context)
@@ -90,11 +92,11 @@ class MockSchedEventTracker : public FtraceSchedEventTracker {
               PushSchedSwitch,
               (uint32_t cpu,
                int64_t timestamp,
-               uint32_t prev_pid,
+               int64_t prev_pid,
                base::StringView prev_comm,
                int32_t prev_prio,
                int64_t prev_state,
-               uint32_t next_pid,
+               int64_t next_pid,
                base::StringView next_comm,
                int32_t next_prio),
               (override));
@@ -107,15 +109,15 @@ class MockProcessTracker : public ProcessTracker {
 
   MOCK_METHOD(UniquePid,
               SetProcessMetadata,
-              (uint32_t pid,
-               std::optional<uint32_t> ppid,
+              (int64_t pid,
+               std::optional<int64_t> ppid,
                base::StringView process_name,
                base::StringView cmdline),
               (override));
 
   MOCK_METHOD(UniqueTid,
               UpdateThreadName,
-              (uint32_t tid,
+              (int64_t tid,
                StringId thread_name_id,
                ThreadNamePriority priority),
               (override));
@@ -125,12 +127,9 @@ class MockProcessTracker : public ProcessTracker {
                StringId thread_name_id,
                ThreadNamePriority priority),
               (override));
-  MOCK_METHOD(UniqueTid,
-              UpdateThread,
-              (uint32_t tid, uint32_t tgid),
-              (override));
+  MOCK_METHOD(UniqueTid, UpdateThread, (int64_t tid, int64_t tgid), (override));
 
-  MOCK_METHOD(UniquePid, GetOrCreateProcess, (uint32_t pid), (override));
+  MOCK_METHOD(UniquePid, GetOrCreateProcess, (int64_t pid), (override));
   MOCK_METHOD(void,
               SetProcessNameIfUnset,
               (UniquePid upid, StringId process_name_id),
@@ -276,7 +275,7 @@ TEST_F(FuchsiaTraceParserTest, InlineInstantEvent) {
       name_ref | category_ref | threadref | event_type | size | record_type;
   push_word(header);
   // Timestamp
-  push_word(0xAAAAAAAAAAAAAAAA);
+  push_word(0x5555555555555555);
   // Pid + tid
   push_word(0xBBBBBBBBBBBBBBBB);
   push_word(0xCCCCCCCCCCCCCCCC);
@@ -285,7 +284,22 @@ TEST_F(FuchsiaTraceParserTest, InlineInstantEvent) {
   // Inline Name
   push_word(0xEEEEEEEEEEEEEEEE);
   EXPECT_TRUE(Tokenize().ok());
+
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_non_numeric_counters].value, 0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_timestamp_overflow].value,
+            0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_record_read_error].value,
+            0);
   EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_event].value, 0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_type].value,
+      0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_name].value,
+      0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_string_ref].value,
+            0);
 }
 
 TEST_F(FuchsiaTraceParserTest, BooleanArguments) {
@@ -299,14 +313,14 @@ TEST_F(FuchsiaTraceParserTest, BooleanArguments) {
   uint64_t argument_count = uint64_t{2} << 20;
   // Instant Event
   uint64_t event_type = 0 << 16;
-  uint64_t size = 8 << 4;
+  uint64_t size = 10 << 4;
   uint64_t record_type = 4;
 
   auto header = name_ref | category_ref | threadref | event_type |
                 argument_count | size | record_type;
   push_word(header);
   // Timestamp
-  push_word(0xAAAAAAAAAAAAAAAA);
+  push_word(0x5555555555555555);
   // Pid + tid
   push_word(0xBBBBBBBBBBBBBBBB);
   push_word(0xCCCCCCCCCCCCCCCC);
@@ -323,7 +337,22 @@ TEST_F(FuchsiaTraceParserTest, BooleanArguments) {
   // 8 byte arg name stream
   push_word(0x0000'0000'0000'0000);
   EXPECT_TRUE(Tokenize().ok());
+
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_non_numeric_counters].value, 0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_timestamp_overflow].value,
+            0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_record_read_error].value,
+            0);
   EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_event].value, 0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_type].value,
+      0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_name].value,
+      0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_string_ref].value,
+            0);
 }
 
 TEST_F(FuchsiaTraceParserTest, FxtWithProtos) {
@@ -492,7 +521,22 @@ TEST_F(FuchsiaTraceParserTest, SchedulerEvents) {
       .Times(2);
 
   EXPECT_TRUE(Tokenize().ok());
+
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_non_numeric_counters].value, 0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_timestamp_overflow].value,
+            0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_record_read_error].value,
+            0);
   EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_event].value, 0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_type].value,
+      0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_name].value,
+      0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_string_ref].value,
+            0);
 
   context_.sorter->ExtractEventsForced();
 }
@@ -563,7 +607,22 @@ TEST_F(FuchsiaTraceParserTest, LegacySchedulerEvents) {
       .Times(2);
 
   EXPECT_TRUE(Tokenize().ok());
+
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_non_numeric_counters].value, 0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_timestamp_overflow].value,
+            0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_record_read_error].value,
+            0);
   EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_event].value, 0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_type].value,
+      0);
+  EXPECT_EQ(
+      context_.storage->stats()[stats::fuchsia_invalid_event_arg_name].value,
+      0);
+  EXPECT_EQ(context_.storage->stats()[stats::fuchsia_invalid_string_ref].value,
+            0);
 
   context_.sorter->ExtractEventsForced();
 }

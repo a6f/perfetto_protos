@@ -17,14 +17,14 @@ import {TrackNode, Workspace} from './workspace';
 describe('workspace', () => {
   test('getNodeByKey', () => {
     const workspace = new Workspace();
-    const track = new TrackNode({id: 'foo'});
+    const track = new TrackNode();
     workspace.addChildLast(track);
 
-    expect(workspace.getTrackById('foo')).toEqual(track);
+    expect(workspace.getTrackById(track.id)).toEqual(track);
   });
 
   test('getNodeByKey', () => {
-    const track = new TrackNode({id: 'bar'});
+    const track = new TrackNode();
 
     const group = new TrackNode();
     group.addChildLast(track);
@@ -33,11 +33,11 @@ describe('workspace', () => {
     const workspace = new Workspace();
     workspace.addChildLast(group);
 
-    expect(workspace.getTrackById('bar')).toBe(track);
+    expect(workspace.getTrackById(track.id)).toBe(track);
   });
 
   test('nested index lookup', () => {
-    const track = new TrackNode({id: 'bar'});
+    const track = new TrackNode();
 
     const group = new TrackNode();
 
@@ -46,22 +46,22 @@ describe('workspace', () => {
     workspace.addChildLast(group);
     group.addChildLast(track);
 
-    expect(workspace.getTrackById('bar')).toBe(track);
+    expect(workspace.getTrackById(track.id)).toBe(track);
   });
 
-  test('nested index lookup', () => {
+  test('nested index lookup after remove', () => {
     const workspace = new Workspace();
 
     const group = new TrackNode();
 
-    const track = new TrackNode({id: 'bar'});
+    const track = new TrackNode();
     group.addChildLast(track);
 
     // Add group to workspace
     workspace.addChildLast(group);
     workspace.removeChild(group);
 
-    expect(workspace.getTrackById('bar')).toBe(undefined);
+    expect(workspace.getTrackById(track.id)).toBe(undefined);
   });
 
   test('getTrackByUri()', () => {
@@ -106,7 +106,7 @@ describe('TrackNode.addChildInOrder', () => {
   });
 
   test('inserts a child into an empty container', () => {
-    const child = new TrackNode({id: 'track1'});
+    const child = new TrackNode();
 
     container.addChildInOrder(child);
 
@@ -185,19 +185,19 @@ describe('TrackNode.addChildInOrder', () => {
 test('TrackNode::flatTracksOrdered', () => {
   const root = new TrackNode();
 
-  const removeme = new TrackNode({id: 'removeme'});
+  const removeme = new TrackNode({uri: 'removeme'});
   root.addChildFirst(removeme);
 
-  const foo = new TrackNode({id: 'foo'});
+  const foo = new TrackNode({uri: 'foo'});
   root.addChildLast(foo);
-  foo.addChildLast(new TrackNode({id: 'fooBar'})); // <-- Note this one is added as a child of foo
-  const bar = new TrackNode({id: 'bar'});
+  foo.addChildLast(new TrackNode({uri: 'fooBar'})); // <-- Note this one is added as a child of foo
+  const bar = new TrackNode({uri: 'bar'});
   root.addChildLast(bar);
-  root.addChildFirst(new TrackNode({id: 'baz'})); // <- Note this one is added first so should appear before the others in flatTracks
+  root.addChildFirst(new TrackNode({uri: 'baz'})); // <- Note this one is added first so should appear before the others in flatTracks
 
   root.removeChild(removeme);
 
-  expect(root.flatTracksOrdered.map(({id}) => id)).toEqual([
+  expect(root.flatTracksOrdered.map(({uri}) => uri)).toEqual([
     'baz',
     'foo',
     'fooBar',
@@ -208,18 +208,18 @@ test('TrackNode::flatTracksOrdered', () => {
 test('TrackNode::flatTracks', () => {
   const root = new TrackNode();
 
-  const removeme = new TrackNode({id: 'removeme'});
+  const removeme = new TrackNode({uri: 'removeme'});
   root.addChildFirst(removeme);
 
-  const foo = new TrackNode({id: 'foo'});
+  const foo = new TrackNode({uri: 'foo'});
   root.addChildLast(foo);
-  foo.addChildLast(new TrackNode({id: 'fooBar'})); // <-- Note this one is added as a child of foo
-  root.addChildLast(new TrackNode({id: 'bar'}));
-  root.addChildFirst(new TrackNode({id: 'baz'})); // <- Note this one is added first so should appear before the others in flatTracks
+  foo.addChildLast(new TrackNode({uri: 'fooBar'})); // <-- Note this one is added as a child of foo
+  root.addChildLast(new TrackNode({uri: 'bar'}));
+  root.addChildFirst(new TrackNode({uri: 'baz'})); // <- Note this one is added first so should appear before the others in flatTracks
 
   root.removeChild(removeme);
 
-  expect(root.flatTracks.map(({id}) => id)).toEqual(
+  expect(root.flatTracks.map(({uri}) => uri)).toEqual(
     expect.arrayContaining(['baz', 'foo', 'fooBar', 'bar']),
   );
   expect(root.flatTracks.length).toBe(4);
@@ -238,7 +238,7 @@ test('TrackNode::clone', () => {
   expect(cloned.id).not.toBe(root.id); // id should be different
   expect(cloned.uri).toBe(root.uri);
   expect(cloned.expanded).toBe(root.expanded);
-  expect(cloned.title).toBe(root.title);
+  expect(cloned.name).toBe(root.name);
   expect(cloned.headless).toBe(root.headless);
   expect(cloned.isSummary).toBe(root.isSummary);
   expect(cloned.removable).toBe(root.removable);
@@ -258,15 +258,15 @@ test('TrackNode::clone(deep)', () => {
   expect(cloned.id).not.toBe(root.id); // id should be different
   expect(cloned.uri).toBe(root.uri);
   expect(cloned.expanded).toBe(root.expanded);
-  expect(cloned.title).toBe(root.title);
+  expect(cloned.name).toBe(root.name);
   expect(cloned.headless).toBe(root.headless);
   expect(cloned.isSummary).toBe(root.isSummary);
   expect(cloned.removable).toBe(root.removable);
   expect(cloned.children).toHaveLength(2);
 
-  expect(cloned.children[0].title).toBe(childA.title);
+  expect(cloned.children[0].name).toBe(childA.name);
   expect(cloned.children[0].uri).toBe(childA.uri);
 
-  expect(cloned.children[1].title).toBe(childB.title);
+  expect(cloned.children[1].name).toBe(childB.name);
   expect(cloned.children[1].uri).toBe(childB.uri);
 });

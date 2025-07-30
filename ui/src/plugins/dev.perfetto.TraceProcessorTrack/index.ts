@@ -12,23 +12,40 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import {removeFalsyValues} from '../../base/array_utils';
 import {assertExists} from '../../base/logging';
+import {Time} from '../../base/time';
+import {createAggregationTab} from '../../components/aggregation_adapter';
+import {
+  metricsFromTableOrSubquery,
+  QueryFlamegraph,
+} from '../../components/query_flamegraph';
+import {MinimapRow} from '../../public/minimap';
 import {PerfettoPlugin} from '../../public/plugin';
+import {AreaSelection, areaSelectionsEqual} from '../../public/selection';
 import {Trace} from '../../public/trace';
 import {COUNTER_TRACK_KIND, SLICE_TRACK_KIND} from '../../public/track_kinds';
 import {getTrackName} from '../../public/utils';
 import {TrackNode} from '../../public/workspace';
-import {NUM, NUM_NULL, STR, STR_NULL} from '../../trace_processor/query_result';
+import {
+  LONG,
+  NUM,
+  NUM_NULL,
+  STR,
+  STR_NULL,
+} from '../../trace_processor/query_result';
+import {escapeSearchQuery} from '../../trace_processor/query_utils';
+import {Flamegraph} from '../../widgets/flamegraph';
 import ProcessThreadGroupsPlugin from '../dev.perfetto.ProcessThreadGroups';
 import StandardGroupsPlugin from '../dev.perfetto.StandardGroups';
 import {CounterSelectionAggregator} from './counter_selection_aggregator';
+import {COUNTER_TRACK_SCHEMAS} from './counter_tracks';
+import {PivotTableTab} from './pivot_table_tab';
+import {SliceSelectionAggregator} from './slice_selection_aggregator';
 import {SLICE_TRACK_SCHEMAS} from './slice_tracks';
 import {TraceProcessorCounterTrack} from './trace_processor_counter_track';
-import {COUNTER_TRACK_SCHEMAS} from './counter_tracks';
-import {SliceSelectionAggregator} from './slice_selection_aggregator';
-import {TraceProcessorSliceTrack} from './trace_processor_slice_track';
+import {createTraceProcessorSliceTrack} from './trace_processor_slice_track';
 import {TopLevelTrackGroup, TrackGroupSchema} from './types';
-import {removeFalsyValues} from '../../base/array_utils';
 
 export default class implements PerfettoPlugin {
   static readonly id = 'dev.perfetto.TraceProcessorTrack';
@@ -37,46 +54,14 @@ export default class implements PerfettoPlugin {
     StandardGroupsPlugin,
   ];
 
+  private groups = new Map<string, TrackNode>();
+
   async onTraceLoad(ctx: Trace): Promise<void> {
     await this.addCounters(ctx);
     await this.addSlices(ctx);
-
-    ctx.selection.registerAreaSelectionAggregator(
-      new CounterSelectionAggregator(),
-    );
-
-    ctx.selection.registerSqlSelectionResolver({
-      sqlTableName: 'slice',
-      callback: async (id: number) => {
-        const compatibleTypes = SLICE_TRACK_SCHEMAS.map(
-          (schema) => `'${schema.type}'`,
-        ).join(',');
-
-        // Locate the track for a given id in the slice table
-        const result = await ctx.engine.query(`
-          select
-            slice.track_id as trackId
-          from slice
-          join track on slice.track_id = track.id
-          where slice.id = ${id} and track.type in (${compatibleTypes})
-        `);
-
-        if (result.numRows() === 0) {
-          return undefined;
-        }
-        const {trackId} = result.firstRow({
-          trackId: NUM,
-        });
-        return {
-          trackUri: `/slice_${trackId}`,
-          eventId: id,
-        };
-      },
-    });
-
-    ctx.selection.registerAreaSelectionAggregator(
-      new SliceSelectionAggregator(),
-    );
+    this.addAggregations(ctx);
+    this.addMinimapContentProvider(ctx);
+    this.addSearchProviders(ctx);
   }
 
   private async addCounters(ctx: Trace) {
@@ -89,6 +74,7 @@ export default class implements PerfettoPlugin {
           ct.name,
           ct.id,
           ct.unit,
+          ct.machine_id as machine,
           extract_arg(ct.dimension_arg_set_id, 'utid') as utid,
           extract_arg(ct.dimension_arg_set_id, 'upid') as upid
         from counter_track ct
@@ -125,6 +111,7 @@ export default class implements PerfettoPlugin {
       pid: NUM_NULL,
       isMainThread: NUM,
       isKernelThread: NUM,
+      machine: NUM_NULL,
     });
     for (; it.valid(); it.next()) {
       const {
@@ -140,13 +127,14 @@ export default class implements PerfettoPlugin {
         pid,
         isMainThread,
         isKernelThread,
+        machine,
       } = it;
       const schema = schemas.get(type);
       if (schema === undefined) {
         continue;
       }
       const {group, topLevelGroup} = schema;
-      const title = getTrackName({
+      const trackName = getTrackName({
         name,
         tid,
         threadName,
@@ -156,14 +144,15 @@ export default class implements PerfettoPlugin {
         utid,
         kind: COUNTER_TRACK_KIND,
         threadTrack: utid !== undefined,
+        machine,
       });
       const uri = `/counter_${trackId}`;
       ctx.tracks.registerTrack({
         uri,
-        title,
         tags: {
           kind: COUNTER_TRACK_KIND,
           trackIds: [trackId],
+          type: type,
           upid: upid ?? undefined,
           utid: utid ?? undefined,
           ...(isKernelThread === 1 && {kernelThread: true}),
@@ -171,7 +160,7 @@ export default class implements PerfettoPlugin {
         chips: removeFalsyValues([
           isKernelThread === 0 && isMainThread === 1 && 'main thread',
         ]),
-        track: new TraceProcessorCounterTrack(
+        renderer: new TraceProcessorCounterTrack(
           ctx,
           uri,
           {
@@ -180,10 +169,10 @@ export default class implements PerfettoPlugin {
             unit: unit ?? undefined,
           },
           trackId,
-          title,
+          trackName,
         ),
       });
-      addTrack(
+      this.addTrack(
         ctx,
         topLevelGroup,
         group,
@@ -191,7 +180,7 @@ export default class implements PerfettoPlugin {
         utid,
         new TrackNode({
           uri,
-          title,
+          name: trackName,
           sortOrder: utid !== undefined || upid !== undefined ? 30 : 0,
         }),
       );
@@ -271,7 +260,7 @@ export default class implements PerfettoPlugin {
       }
       const trackIds = rawTrackIds.split(',').map((v) => Number(v));
       const {group, topLevelGroup} = schema;
-      const title = getTrackName({
+      const trackName = getTrackName({
         name,
         tid,
         threadName,
@@ -285,10 +274,10 @@ export default class implements PerfettoPlugin {
       const uri = `/slice_${trackIds[0]}`;
       ctx.tracks.registerTrack({
         uri,
-        title,
         tags: {
           kind: SLICE_TRACK_KIND,
           trackIds: trackIds,
+          type: type,
           upid: upid ?? undefined,
           utid: utid ?? undefined,
           ...(isKernelThread === 1 && {kernelThread: true}),
@@ -296,9 +285,14 @@ export default class implements PerfettoPlugin {
         chips: removeFalsyValues([
           isKernelThread === 0 && isMainThread === 1 && 'main thread',
         ]),
-        track: new TraceProcessorSliceTrack(ctx, uri, maxDepth, trackIds),
+        renderer: await createTraceProcessorSliceTrack({
+          trace: ctx,
+          uri,
+          maxDepth,
+          trackIds,
+        }),
       });
-      addTrack(
+      this.addTrack(
         ctx,
         topLevelGroup,
         group,
@@ -306,77 +300,284 @@ export default class implements PerfettoPlugin {
         utid,
         new TrackNode({
           uri,
-          title,
+          name: trackName,
           sortOrder: utid !== undefined || upid !== undefined ? 20 : 0,
         }),
       );
     }
   }
+
+  private addTrack(
+    ctx: Trace,
+    topLevelGroup: TopLevelTrackGroup,
+    group: string | TrackGroupSchema | undefined,
+    upid: number | null,
+    utid: number | null,
+    track: TrackNode,
+  ) {
+    switch (topLevelGroup) {
+      case 'PROCESS': {
+        const process = assertExists(
+          ctx.plugins
+            .getPlugin(ProcessThreadGroupsPlugin)
+            .getGroupForProcess(assertExists(upid)),
+        );
+        this.getGroupByName(process, group, upid).addChildInOrder(track);
+        break;
+      }
+      case 'THREAD': {
+        const thread = assertExists(
+          ctx.plugins
+            .getPlugin(ProcessThreadGroupsPlugin)
+            .getGroupForThread(assertExists(utid)),
+        );
+        this.getGroupByName(thread, group, utid).addChildInOrder(track);
+        break;
+      }
+      case undefined: {
+        this.getGroupByName(ctx.workspace.tracks, group, upid).addChildInOrder(
+          track,
+        );
+        break;
+      }
+      default: {
+        const standardGroup = ctx.plugins
+          .getPlugin(StandardGroupsPlugin)
+          .getOrCreateStandardGroup(ctx.workspace, topLevelGroup);
+        this.getGroupByName(standardGroup, group, null).addChildInOrder(track);
+        break;
+      }
+    }
+  }
+
+  private getGroupByName(
+    node: TrackNode,
+    group: string | TrackGroupSchema | undefined,
+    scopeId: number | null,
+  ) {
+    if (group === undefined) {
+      return node;
+    }
+    // This is potentially dangerous - ids MUST be unique within the entire
+    // workspace - this seems to indicate that we could end up duplicating ids in
+    // different nodes.
+    const name = typeof group === 'string' ? group : group.name;
+    const expanded =
+      typeof group === 'string' ? false : group.expanded ?? false;
+    const groupId = `tp_group_${scopeId}_${name.toLowerCase().replace(' ', '_')}`;
+    const groupNode = this.groups.get(groupId);
+    if (groupNode) {
+      return groupNode;
+    }
+    const newGroup = new TrackNode({
+      uri: `/${group}`,
+      isSummary: true,
+      name,
+      collapsed: !expanded,
+    });
+    node.addChildInOrder(newGroup);
+    this.groups.set(groupId, newGroup);
+    return newGroup;
+  }
+
+  private addAggregations(ctx: Trace) {
+    ctx.selection.registerAreaSelectionTab(
+      createAggregationTab(ctx, new CounterSelectionAggregator()),
+    );
+    ctx.selection.registerAreaSelectionTab(
+      createAggregationTab(ctx, new SliceSelectionAggregator()),
+    );
+    ctx.selection.registerAreaSelectionTab(new PivotTableTab(ctx));
+    ctx.selection.registerAreaSelectionTab(createSliceFlameGraphPanel(ctx));
+  }
+
+  private addMinimapContentProvider(ctx: Trace) {
+    ctx.minimap.registerContentProvider({
+      priority: 1,
+      getData: async (timeSpan, resolution) => {
+        const traceSpan = timeSpan.toTimeSpan();
+        const sliceResult = await ctx.engine.query(`
+              SELECT
+                bucket,
+                upid,
+                IFNULL(SUM(utid_sum) / CAST(${resolution} AS FLOAT), 0) AS load
+              FROM thread
+              INNER JOIN (
+                SELECT
+                  IFNULL(CAST((ts - ${traceSpan.start}) / ${resolution} AS INT), 0) AS bucket,
+                  SUM(dur) AS utid_sum,
+                  utid
+                FROM slice
+                INNER JOIN thread_track ON slice.track_id = thread_track.id
+                GROUP BY
+                  bucket,
+                  utid
+              ) USING(utid)
+              WHERE
+                upid IS NOT NULL
+              GROUP BY
+                bucket,
+                upid;
+            `);
+
+        const slicesData = new Map<string, MinimapRow>();
+        const it = sliceResult.iter({bucket: LONG, upid: NUM, load: NUM});
+        for (; it.valid(); it.next()) {
+          const bucket = it.bucket;
+          const upid = it.upid;
+          const load = it.load;
+
+          const ts = Time.add(traceSpan.start, resolution * bucket);
+
+          const upidStr = upid.toString();
+          let loadArray = slicesData.get(upidStr);
+          if (loadArray === undefined) {
+            loadArray = [];
+            slicesData.set(upidStr, loadArray);
+          }
+          loadArray.push({ts, dur: resolution, load});
+        }
+
+        const rows: MinimapRow[] = [];
+        for (const row of slicesData.values()) {
+          rows.push(row);
+        }
+        return rows;
+      },
+    });
+  }
+
+  private addSearchProviders(ctx: Trace) {
+    ctx.search.registerSearchProvider({
+      name: 'Slices by name',
+      selectTracks(tracks) {
+        return tracks
+          .filter((t) => t.tags?.kind === SLICE_TRACK_KIND)
+          .filter((t) =>
+            t.renderer.getDataset?.()?.implements({name: STR_NULL}),
+          );
+      },
+      async getSearchFilter(searchTerm) {
+        return {
+          where: `name GLOB ${escapeSearchQuery(searchTerm)}`,
+        };
+      },
+    });
+
+    ctx.search.registerSearchProvider({
+      name: 'Slices by id',
+      selectTracks(tracks) {
+        return tracks
+          .filter((t) => t.tags?.kind === SLICE_TRACK_KIND)
+          .filter((t) => t.renderer.getDataset?.()?.implements({id: NUM_NULL}));
+      },
+      async getSearchFilter(searchTerm) {
+        // Attempt to parse the search term as an integer.
+        const id = Number(searchTerm);
+
+        // Note: Number.isInteger also returns false for NaN.
+        if (!Number.isInteger(id)) {
+          return undefined;
+        }
+
+        return {
+          where: `id = ${searchTerm}`,
+        };
+      },
+    });
+
+    ctx.search.registerSearchProvider({
+      name: 'Slice arguments',
+      selectTracks(tracks) {
+        return tracks
+          .filter((t) => t.tags?.kind === SLICE_TRACK_KIND)
+          .filter((t) =>
+            t.renderer.getDataset?.()?.implements({arg_set_id: NUM_NULL}),
+          );
+      },
+      async getSearchFilter(searchTerm) {
+        const searchLiteral = escapeSearchQuery(searchTerm);
+        return {
+          join: `args USING(arg_set_id)`,
+          where: `
+            args.string_value GLOB ${searchLiteral}
+            OR
+            args.key GLOB ${searchLiteral}
+          `,
+        };
+      },
+    });
+  }
 }
 
-function addTrack(
-  ctx: Trace,
-  topLevelGroup: TopLevelTrackGroup,
-  group: string | TrackGroupSchema | undefined,
-  upid: number | null,
-  utid: number | null,
-  track: TrackNode,
-) {
-  switch (topLevelGroup) {
-    case 'PROCESS': {
-      const process = assertExists(
-        ctx.plugins
-          .getPlugin(ProcessThreadGroupsPlugin)
-          .getGroupForProcess(assertExists(upid)),
-      );
-      getGroupByName(process, group, upid).addChildInOrder(track);
-      break;
-    }
-    case 'THREAD': {
-      const thread = assertExists(
-        ctx.plugins
-          .getPlugin(ProcessThreadGroupsPlugin)
-          .getGroupForThread(assertExists(utid)),
-      );
-      getGroupByName(thread, group, utid).addChildInOrder(track);
-      break;
-    }
-    case undefined: {
-      getGroupByName(ctx.workspace.tracks, group, upid).addChildInOrder(track);
-      break;
-    }
-    default: {
-      const standardGroup = ctx.plugins
-        .getPlugin(StandardGroupsPlugin)
-        .getOrCreateStandardGroup(ctx.workspace, topLevelGroup);
-      getGroupByName(standardGroup, group, null).addChildInOrder(track);
-      break;
-    }
-  }
+function createSliceFlameGraphPanel(trace: Trace) {
+  let previousSelection: AreaSelection | undefined;
+  let sliceFlamegraph: QueryFlamegraph | undefined;
+  return {
+    id: 'slice_flamegraph_selection',
+    name: 'Slice Flamegraph',
+    render(selection: AreaSelection) {
+      const selectionChanged =
+        previousSelection === undefined ||
+        !areaSelectionsEqual(previousSelection, selection);
+      previousSelection = selection;
+      if (selectionChanged) {
+        sliceFlamegraph = computeSliceFlamegraph(trace, selection);
+      }
+
+      if (sliceFlamegraph === undefined) {
+        return undefined;
+      }
+
+      return {isLoading: false, content: sliceFlamegraph.render()};
+    },
+  };
 }
 
-function getGroupByName(
-  node: TrackNode,
-  group: string | TrackGroupSchema | undefined,
-  scopeId: number | null,
-) {
-  if (group === undefined) {
-    return node;
+function computeSliceFlamegraph(trace: Trace, currentSelection: AreaSelection) {
+  const trackIds = [];
+  for (const trackInfo of currentSelection.tracks) {
+    if (trackInfo?.tags?.kind !== SLICE_TRACK_KIND) {
+      continue;
+    }
+    if (trackInfo.tags?.trackIds === undefined) {
+      continue;
+    }
+    trackIds.push(...trackInfo.tags.trackIds);
   }
-  const name = typeof group === 'string' ? group : group.name;
-  const expanded = typeof group === 'string' ? false : group.expanded ?? false;
-  const groupId = `tp_group_${scopeId}_${name.toLowerCase().replace(' ', '_')}`;
-  const groupNode = node.getTrackById(groupId);
-  if (groupNode) {
-    return groupNode;
+  if (trackIds.length === 0) {
+    return undefined;
   }
-  const newGroup = new TrackNode({
-    uri: `/${group}`,
-    id: groupId,
-    isSummary: true,
-    title: name,
-    collapsed: !expanded,
+  const metrics = metricsFromTableOrSubquery(
+    `
+      (
+        select *
+        from _viz_slice_ancestor_agg!((
+          select s.id, s.dur
+          from slice s
+          left join slice t on t.parent_id = s.id
+          where s.ts >= ${currentSelection.start}
+            and s.ts <= ${currentSelection.end}
+            and s.track_id in (${trackIds.join(',')})
+            and t.id is null
+        ))
+      )
+    `,
+    [
+      {
+        name: 'Duration',
+        unit: 'ns',
+        columnName: 'self_dur',
+      },
+      {
+        name: 'Samples',
+        unit: '',
+        columnName: 'self_count',
+      },
+    ],
+    'include perfetto module viz.slices;',
+  );
+  return new QueryFlamegraph(trace, metrics, {
+    state: Flamegraph.createDefaultState(metrics),
   });
-  node.addChildInOrder(newGroup);
-  return newGroup;
 }

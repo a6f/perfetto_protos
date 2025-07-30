@@ -2,124 +2,114 @@
 
 ## Quickstart
 
-NOTE: Perfetto can be built on Windows, Mac or Linux. However, setting up the environment on Windows is complicated so is not covered by this quickstart.
+Follow those steps if you are new to contributing to Perfetto.
 
-Prerequisites: git and python3.
+### Setup
 
-Setup:
+**Prerequisites:** git and python3.
+
 ```sh
-git clone https://android.googlesource.com/platform/external/perfetto/
+# Clone the Perfetto repo and enter the directory
+git clone https://github.com/google/perfetto.git
 cd perfetto
+
+# Install dependencies
 tools/install-build-deps
+
+# Setup all build configs
 tools/setup_all_configs.py
 ```
 
 ### Building
 
-#### On Linux
+_On Linux_
 
-For production:
 ```sh
+# Production build
 tools/ninja -C out/linux_clang_release
-```
 
-For debug:
-```sh
+# Debug build
 tools/ninja -C out/linux_clang_debug
 ```
 
-#### On Mac
+_On Mac_
 
-For production:
 ```sh
+# Production build
 tools/ninja -C out/mac_release
-```
 
-For debug:
-```sh
+# Debug build
 tools/ninja -C out/mac_debug
 ```
 
+_UI_
+
+```sh
+# Build the UI
+ui/build
+
+# Run the dev server
+ui/run_dev_server
+```
+
+For more information on building Perfetto go to [build instructions](build-instructions).
+
 ### Contributing
 
-1. Create an account at [android.googlesource.com](https://android.googlesource.com/).
-2. (if you are a Googler) Follow go/sync#get-credentials to allow uploading to
-Android Gerrit.
-3. Download `depot_tools`, a collection of helper scripts which make uploading changes
-to Android Gerrit easier.
+NOTE: In March 2025 our team has moved the primary development of Perfetto
+to GitHub (previously on Android Gerrit).
+
+#### Googlers
+
+NOTE: Follow the instructions at [go/perfetto-github-instructions](http://go/perfetto-github-instructions).
+
+1. Make sure you/your organization has signed the Google CLA at [cla.developers.google.com](https://cla.developers.google.com/)
+2. Create a branch with the change:
+
 ```sh
-cd perfetto
-git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git
+git checkout -b first-contribution
 ```
-4. Add `depot_tools` to your PATH (you may want to add this to your .bashrc/.zshrc):
-```sh
-depot_path="$(realpath depot_tools)"
-export PATH=$depot_path:$PATH
-```
-5. Create a branch with the change:
-```sh
-git new-branch first-contribution
-```
-6. Make change in the repo.
-7. Add, commit and upload the change:
+
+3. Make change in the repo.
+4. Add, commit and upload the change:
+
 ```sh
 git add .
 git commit -m "My first contribution"
-git cl upload
+gh pr create  # Requires cli.github.com
 ```
 
-## Repository
+Please note our project follows the [Google C++ style](https://google.github.io/styleguide/cppguide.html), and targets `-std=c++17`.
 
-This project uses [Android AOSP Gerrit][perfetto-gerrit] for code reviews,
-follows the [Google C++ style][google-cpp-style], and targets `-std=c++17`.
+#### External contributors
 
-Development happens in the AOSP repository:
-https://android.googlesource.com/platform/external/perfetto/
+Please contribute the same way as you would to any other Github repository.
+A good explanation of how to do it can be found [here](https://docs.github.com/en/get-started/exploring-projects-on-github/contributing-to-a-project).
 
-https://github.com/google/perfetto is an up-to-date and actively maintained
-read-only mirror of the above. Pull requests through GitHub are not accepted.
+### Testing
 
-## Code Reviews
+As Perfetto has a rather complicated testing strategy, we will automatically run our presubmit on each push into the repo.
+For manual run: `tools/run_presubmit`.
 
-All submissions, including submissions by project members, require review.
-We use [Android AOSP Gerrit][perfetto-gerrit] for this purpose.
+For more information on testing Perfetto go to [testing page](testing).
 
-`git cl upload` from [Chromium depot tools][depot-tools] is the preferred
-workflow to upload patches, as it takes care of runing presubmit tests,
-build-file generators and code formatting.
+## What's next?
 
-If you submit code directly through `repo` and your CL touches build files or
-.proto files, it's very likely that it will fail in the CI because the
-aforementioned generators are bypassed.
+You might want to contribute to the UI, Trace Processor, SDK or various data importers.
 
-## Continuous integration
+- If you want to add a new functionality to the UI, most likely the next step is the [UI getting started](ui-getting-started).
+- If you want to edit the core functionality of the UI: it's a much bigger change which would require in depth understanding of Perfetto UI. Most requests/bugs now are related to various plugins, not the core.
+- If you want to add a new ftrace event take a look at [common tasks page](common-tasks).
+- If you want to add a new table/view/function to Perfetto SQL standard library you need to first undestand [the Perfetto SQL syntax](/docs/analysis/perfetto-sql-syntax.md), and then read the details of updating the standard library at [common tasks page](common-tasks).
+- If you want to add a support of a new file type into Perfetto, you need to add a new `importer` to Trace Processor C++ code.
 
-There are two levels of CI / TryBots involved when submitting a Perfetto CL:
+## {#community} Communication
 
-- [ci.perfetto.dev](https://ci.perfetto.dev): it covers building and testing
-  on most platforms and toolchains within ~15 mins. Anecdotally most build
-  failures and bugs are detected at the Perfetto CI level.
+### Contact
 
-- The [Android CI](https://ci.android.com) (also known as TreeHugger) builds a
-  full system image and runs full integration tests within ~2-4 hours. This can
-  shake a number of more rare integration bugs, often related with SELinux,
-  initrc files or similar.
+Our main communication channel is our mailing list: https://groups.google.com/forum/#!forum/perfetto-dev.
 
-Both CIs are kicked in when the `Presubmit-Ready: +1` is set and will publish a
-comment like [this][ci-example] on the CL.
-
-You need to wait for both CIs to go green before submitting. The only
-exceptions are UI-only, docs-only or GN-only changes, for which the Android CI
-can be bypassed, as those are not built as part of the Android tree.
-
-You can also
-[test a pending Perfetto CL against Chrome's TryBots](testing.md#chromium).
-
-## Community
-
-You can reach us on our [Discord channel](https://discord.gg/35ShE3A).
-
-Mailing list: https://groups.google.com/forum/#!forum/perfetto-dev
+You can also reach us on our [Discord channel](https://discord.gg/35ShE3A) but our support there is best effort only.
 
 This project follows
 [Google's Open Source Community Guidelines](https://opensource.google/conduct/).
@@ -128,12 +118,12 @@ This project follows
 
 For bugs affecting Android or the tracing internals:
 
-* **Googlers**: use the internal bug tracker [go/perfetto-bugs](http://goto.google.com/perfetto-bugs)
-* **Non-Googlers**: use [GitHub issues](https://github.com/google/perfetto/issues).
+- **Googlers**: use the internal bug tracker [go/perfetto-bugs](http://goto.google.com/perfetto-bugs)
+- **Non-Googlers**: use [GitHub issues](https://github.com/google/perfetto/issues).
 
 For bugs affecting Chrome Tracing:
 
-* Use http://crbug.com `Component:Speed>Tracing label:Perfetto`.
+- Use http://crbug.com `Component:Speed>Tracing label:Perfetto`.
 
 ## Contributor License Agreement
 
@@ -146,8 +136,3 @@ your current agreements on file or to sign a new one.
 You generally only need to submit a CLA once, so if you've already submitted one
 (even if it was for a different project), you probably don't need to do it
 again.
-
-[perfetto-gerrit]: https://android-review.googlesource.com/q/project:platform%252Fexternal%252Fperfetto+status:open
-[google-cpp-style]: https://google.github.io/styleguide/cppguide.html
-[depot-tools]: https://dev.chromium.org/developers/how-tos/depottools
-[ci-example]: https://android-review.googlesource.com/c/platform/external/perfetto/+/1108253/3#message-09fd27fb92ca8357abade3ec725919ac3445f3af

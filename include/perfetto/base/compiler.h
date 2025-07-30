@@ -23,6 +23,18 @@
 
 #include "perfetto/public/compiler.h"
 
+#if defined(_MSC_VER)
+#define PERFETTO_ASSUME(x) __assume(x)
+#elif defined(__clang__)
+#define PERFETTO_ASSUME(x) __builtin_assume(x)
+#else
+#define PERFETTO_ASSUME(x)     \
+  do {                         \
+    if (!(x))                  \
+      __builtin_unreachable(); \
+  } while (0)
+#endif
+
 // __has_attribute is supported only by clang and recent versions of GCC.
 // Add a layer to wrap the __has_attribute macro.
 #if defined(__has_attribute)
@@ -143,18 +155,6 @@ namespace perfetto::base {
 
 template <typename... T>
 inline void ignore_result(const T&...) {}
-
-// Given a std::variant and a type T, returns the index of the T in the variant.
-template <typename VariantType, typename T, size_t i = 0>
-constexpr size_t variant_index() {
-  static_assert(i < std::variant_size_v<VariantType>,
-                "Type not found in variant");
-  if constexpr (std::is_same_v<std::variant_alternative_t<i, VariantType>, T>) {
-    return i;
-  } else {
-    return variant_index<VariantType, T, i + 1>();
-  }
-}
 
 }  // namespace perfetto::base
 

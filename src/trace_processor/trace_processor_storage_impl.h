@@ -19,7 +19,6 @@
 
 #include "perfetto/ext/base/hash.h"
 #include "perfetto/trace_processor/basic_types.h"
-#include "perfetto/trace_processor/status.h"
 #include "perfetto/trace_processor/trace_processor_storage.h"
 #include "src/trace_processor/importers/common/trace_file_tracker.h"
 #include "src/trace_processor/types/trace_processor_context.h"
@@ -34,7 +33,7 @@ class TraceProcessorStorageImpl : public TraceProcessorStorage {
   explicit TraceProcessorStorageImpl(const Config&);
   ~TraceProcessorStorageImpl() override;
 
-  util::Status Parse(TraceBlobView) override;
+  base::Status Parse(TraceBlobView) override;
   void Flush() override;
   base::Status NotifyEndOfFile() override;
 
@@ -46,6 +45,7 @@ class TraceProcessorStorageImpl : public TraceProcessorStorage {
   base::Hasher trace_hash_;
   TraceProcessorContext context_;
   bool unrecoverable_parse_error_ = false;
+  bool eof_ = false;
   size_t hash_input_size_remaining_ = 4096;
   ForwardingTraceParser* parser_ = nullptr;
 };

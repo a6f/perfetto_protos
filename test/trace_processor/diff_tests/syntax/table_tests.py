@@ -13,8 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from python.generators.diff_tests.testing import Path, DataPath, Metric
-from python.generators.diff_tests.testing import Csv, Json, TextProto
+from python.generators.diff_tests.testing import Path, DataPath
+from python.generators.diff_tests.testing import Csv, TextProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import TestSuite
 
@@ -73,11 +73,11 @@ class PerfettoTable(TestSuite):
         """,
         out=Csv("""
         "id","name","col_type","nullable","sorted"
-        0,"id","id",0,1
-        1,"ts","int64",0,1
-        2,"track_id","uint32",0,0
-        3,"value","double",0,0
-        4,"arg_set_id","uint32",1,0
+        0,"id","id",0,0
+        1,"ts","int64",0,2
+        2,"track_id","uint32",0,3
+        3,"value","double",0,3
+        4,"arg_set_id","uint32",2,3
         """))
 
   def test_perfetto_table_info_runtime_table(self):
@@ -97,7 +97,8 @@ class PerfettoTable(TestSuite):
         """,
         out=Csv("""
         "id","name","col_type","nullable","sorted"
-        0,"c","int64",0,0
+        0,"c","uint32",0,3
+        1,"_auto_id","id",0,0
         """))
 
   def test_create_perfetto_table_nullable_column(self):
@@ -128,7 +129,7 @@ class PerfettoTable(TestSuite):
         """,
         out=Csv("""
         "sorted"
-        1
+        2
         """))
 
   def test_create_perfetto_table_id_column(self):
@@ -136,11 +137,11 @@ class PerfettoTable(TestSuite):
         trace=TextProto(''),
         query="""
         CREATE PERFETTO TABLE foo AS
-        SELECT 2 AS c
+        SELECT 0 AS c
         UNION
-        SELECT 4
+        SELECT 1
         UNION
-        SELECT 6;
+        SELECT 2;
 
         SELECT col_type FROM perfetto_table_info('foo')
         WHERE name = 'c';
@@ -280,6 +281,25 @@ class PerfettoTable(TestSuite):
         7,70
         8,80
         9,90
+        """))
+
+  def test_perfetto_table_limit_and_offset(self):
+    return DiffTestBlueprint(
+        trace=TextProto(''),
+        query="""
+        CREATE PERFETTO TABLE foo AS
+        WITH
+          data(x) AS (
+            VALUES(1), (2), (3), (4), (5)
+          )
+        SELECT x FROM data;
+
+        SELECT * FROM foo LIMIT 2 OFFSET 3;
+        """,
+        out=Csv("""
+        "x"
+        4
+        5
         """))
 
   def test_max(self):
@@ -457,13 +477,14 @@ class PerfettoTable(TestSuite):
         query="""
         SELECT flat_key, key, int_value, string_value, real_value FROM __intrinsic_winscope_proto_to_args_with_defaults('surfaceflinger_layer') AS sfl
         ORDER BY sfl.base64_proto_id, key
-        LIMIT 95
+        LIMIT 96
         """,
         out=Csv("""
         "flat_key","key","int_value","string_value","real_value"
         "active_buffer","active_buffer","[NULL]","[NULL]","[NULL]"
         "app_id","app_id",0,"[NULL]","[NULL]"
         "background_blur_radius","background_blur_radius",0,"[NULL]","[NULL]"
+        "background_blur_scale","background_blur_scale","[NULL]","[NULL]",0.000000
         "barrier_layer","barrier_layer","[NULL]","[NULL]","[NULL]"
         "blur_regions","blur_regions","[NULL]","[NULL]","[NULL]"
         "bounds.bottom","bounds.bottom","[NULL]","[NULL]",24000.000000
@@ -605,4 +626,95 @@ class PerfettoTable(TestSuite):
         "vsync_id","vsync_id",24767,"[NULL]","[NULL]"
         "where","where","[NULL]","bufferLatched","[NULL]"
         "displays.dpi_x","displays[0].dpi_x","[NULL]","[NULL]",0.000000
+        """))
+
+  def test_winscope_proto_to_args_with_defaults_with_multiple_packets_per_proto(
+      self):
+    return DiffTestBlueprint(
+        trace=Path('../parser/android/shell_transitions.textproto'),
+        query="""
+          SELECT key, int_value, real_value FROM __intrinsic_winscope_proto_to_args_with_defaults('__intrinsic_window_manager_shell_transition_protos') as tbl
+          ORDER BY tbl.base64_proto_id, key
+          LIMIT 56
+          """,
+        out=Csv("""
+          "key","int_value","real_value"
+          "create_time_ns",76799049027,"[NULL]"
+          "finish_time_ns",0,"[NULL]"
+          "finish_transaction_id",5604932321954,"[NULL]"
+          "flags",0,"[NULL]"
+          "merge_request_time_ns",0,"[NULL]"
+          "merge_target",0,"[NULL]"
+          "merge_time_ns",0,"[NULL]"
+          "send_time_ns",76875395422,"[NULL]"
+          "shell_abort_time_ns",0,"[NULL]"
+          "start_transaction_id",5604932321952,"[NULL]"
+          "targets","[NULL]","[NULL]"
+          "type",0,"[NULL]"
+          "wm_abort_time_ns",0,"[NULL]"
+          "create_time_ns",77854865352,"[NULL]"
+          "dispatch_time_ns",77899001013,"[NULL]"
+          "finish_transaction_id",5604932322159,"[NULL]"
+          "flags",0,"[NULL]"
+          "merge_request_time_ns",0,"[NULL]"
+          "merge_target",0,"[NULL]"
+          "merge_time_ns",0,"[NULL]"
+          "send_time_ns",77894307328,"[NULL]"
+          "shell_abort_time_ns",0,"[NULL]"
+          "start_transaction_id",5604932322158,"[NULL]"
+          "starting_window_remove_time_ns",0,"[NULL]"
+          "targets","[NULL]","[NULL]"
+          "type",0,"[NULL]"
+          "wm_abort_time_ns",0,"[NULL]"
+          "create_time_ns",82498121051,"[NULL]"
+          "finish_time_ns",0,"[NULL]"
+          "finish_transaction_id",5604932322347,"[NULL]"
+          "flags",0,"[NULL]"
+          "merge_request_time_ns",0,"[NULL]"
+          "merge_target",0,"[NULL]"
+          "merge_time_ns",0,"[NULL]"
+          "send_time_ns",82535513345,"[NULL]"
+          "shell_abort_time_ns",0,"[NULL]"
+          "start_transaction_id",5604932322346,"[NULL]"
+          "starting_window_remove_time_ns",0,"[NULL]"
+          "targets[0].flags",0,"[NULL]"
+          "targets[0].mode",0,"[NULL]"
+          "targets[0].window_id",11,"[NULL]"
+          "type",0,"[NULL]"
+          "wm_abort_time_ns",0,"[NULL]"
+          "create_time_ns",76955664017,"[NULL]"
+          "finish_time_ns",0,"[NULL]"
+          "finish_transaction_id",5604932322029,"[NULL]"
+          "flags",0,"[NULL]"
+          "merge_request_time_ns",0,"[NULL]"
+          "send_time_ns",77277756832,"[NULL]"
+          "shell_abort_time_ns",0,"[NULL]"
+          "start_transaction_id",5604932322028,"[NULL]"
+          "starting_window_remove_time_ns",0,"[NULL]"
+          "targets","[NULL]","[NULL]"
+          "type",0,"[NULL]"
+          "wm_abort_time_ns",0,"[NULL]"
+          "starting_window_remove_time_ns",77706603918,"[NULL]"
+          """))
+
+  def test_winscope_proto_to_args_with_defaults_with_interned_strings(self):
+    return DiffTestBlueprint(
+        trace=Path('../parser/android/viewcapture.textproto'),
+        query="""
+        SELECT flat_key, key, int_value, string_value FROM __intrinsic_winscope_proto_to_args_with_defaults('__intrinsic_viewcapture_view')
+        WHERE flat_key LIKE '%_iid'
+          OR flat_key LIKE '%_name'
+          OR flat_key LIKE '%view_id'
+        ORDER BY base64_proto_id, key
+        """,
+        out=Csv("""
+        "flat_key","key","int_value","string_value"
+        "class_name","class_name","[NULL]","com.android.internal.policy.PhoneWindow@6cec234"
+        "view_id","view_id","[NULL]","NO_ID"
+        "class_name","class_name","[NULL]","com.android.internal.policy.DecorView"
+        "view_id","view_id","[NULL]","STRING DE-INTERNING ERROR"
+        "view_id_iid","view_id_iid",3,"[NULL]"
+        "class_name","class_name","[NULL]","STRING DE-INTERNING ERROR"
+        "class_name_iid","class_name_iid",3,"[NULL]"
+        "view_id","view_id","[NULL]","NO_ID"
         """))

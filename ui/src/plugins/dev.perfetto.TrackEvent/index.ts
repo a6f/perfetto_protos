@@ -20,7 +20,7 @@ import {NUM, NUM_NULL, STR, STR_NULL} from '../../trace_processor/query_result';
 import {TrackNode} from '../../public/workspace';
 import {assertExists, assertTrue} from '../../base/logging';
 import {COUNTER_TRACK_KIND, SLICE_TRACK_KIND} from '../../public/track_kinds';
-import {TraceProcessorSliceTrack} from '../dev.perfetto.TraceProcessorTrack/trace_processor_slice_track';
+import {createTraceProcessorSliceTrack} from '../dev.perfetto.TraceProcessorTrack/trace_processor_slice_track';
 import {TraceProcessorCounterTrack} from '../dev.perfetto.TraceProcessorTrack/trace_processor_counter_track';
 import {getTrackName} from '../../public/utils';
 
@@ -30,6 +30,8 @@ export default class implements PerfettoPlugin {
     ProcessThreadGroupsPlugin,
     TraceProcessorTrackPlugin,
   ];
+
+  private parentTrackNodes = new Map<string, TrackNode>();
 
   async onTraceLoad(ctx: Trace): Promise<void> {
     const res = await ctx.engine.query(`
@@ -103,7 +105,7 @@ export default class implements PerfettoPlugin {
 
       const kind = isCounter ? COUNTER_TRACK_KIND : SLICE_TRACK_KIND;
       const trackIds = rawTrackIds.split(',').map((v) => Number(v));
-      const title = getTrackName({
+      const trackName = getTrackName({
         name,
         utid,
         upid,
@@ -124,37 +126,39 @@ export default class implements PerfettoPlugin {
         const trackId = trackIds[0];
         ctx.tracks.registerTrack({
           uri,
-          title,
           tags: {
             kind,
             trackIds: [trackIds[0]],
             upid: upid ?? undefined,
             utid: utid ?? undefined,
           },
-          track: new TraceProcessorCounterTrack(
+          renderer: new TraceProcessorCounterTrack(
             ctx,
             uri,
             {
               unit: unit ?? undefined,
             },
             trackId,
-            title,
+            trackName,
           ),
         });
       } else if (hasData) {
         ctx.tracks.registerTrack({
           uri,
-          title,
           tags: {
             kind,
             trackIds: trackIds,
             upid: upid ?? undefined,
             utid: utid ?? undefined,
           },
-          track: new TraceProcessorSliceTrack(ctx, uri, undefined, trackIds),
+          renderer: await createTraceProcessorSliceTrack({
+            trace: ctx,
+            uri,
+            trackIds,
+          }),
         });
       }
-      const parent = findParentTrackNode(
+      const parent = this.findParentTrackNode(
         ctx,
         processGroupsPlugin,
         trackIdToTrackNode,
@@ -164,47 +168,47 @@ export default class implements PerfettoPlugin {
         hasChildren,
       );
       const node = new TrackNode({
-        title,
+        name: trackName,
         sortOrder: orderId,
         isSummary: hasData === 0,
-        uri: uri,
+        uri,
       });
       parent.addChildInOrder(node);
       trackIdToTrackNode.set(trackIds[0], node);
     }
   }
-}
 
-function findParentTrackNode(
-  ctx: Trace,
-  processGroupsPlugin: ProcessThreadGroupsPlugin,
-  trackIdToTrackNode: Map<number, TrackNode>,
-  parentId: number | undefined,
-  upid: number | undefined,
-  utid: number | undefined,
-  hasChildren: number,
-): TrackNode {
-  if (parentId !== undefined) {
-    return assertExists(trackIdToTrackNode.get(parentId));
+  private findParentTrackNode(
+    ctx: Trace,
+    processGroupsPlugin: ProcessThreadGroupsPlugin,
+    trackIdToTrackNode: Map<number, TrackNode>,
+    parentId: number | undefined,
+    upid: number | undefined,
+    utid: number | undefined,
+    hasChildren: number,
+  ): TrackNode {
+    if (parentId !== undefined) {
+      return assertExists(trackIdToTrackNode.get(parentId));
+    }
+    if (utid !== undefined) {
+      return assertExists(processGroupsPlugin.getGroupForThread(utid));
+    }
+    if (upid !== undefined) {
+      return assertExists(processGroupsPlugin.getGroupForProcess(upid));
+    }
+    if (hasChildren) {
+      return ctx.workspace.tracks;
+    }
+    const id = `/track_event_root`;
+    let node = this.parentTrackNodes.get(id);
+    if (node === undefined) {
+      node = new TrackNode({
+        name: 'Global Track Events',
+        isSummary: true,
+      });
+      ctx.workspace.addChildInOrder(node);
+      this.parentTrackNodes.set(id, node);
+    }
+    return node;
   }
-  if (utid !== undefined) {
-    return assertExists(processGroupsPlugin.getGroupForThread(utid));
-  }
-  if (upid !== undefined) {
-    return assertExists(processGroupsPlugin.getGroupForProcess(upid));
-  }
-  if (hasChildren) {
-    return ctx.workspace.tracks;
-  }
-  const id = `/track_event_root`;
-  let node = ctx.workspace.getTrackById(id);
-  if (node === undefined) {
-    node = new TrackNode({
-      id,
-      title: 'Global Track Events',
-      isSummary: true,
-    });
-    ctx.workspace.addChildInOrder(node);
-  }
-  return node;
 }

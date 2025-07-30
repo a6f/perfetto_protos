@@ -90,7 +90,14 @@ namespace perfetto::trace_processor::stats {
                                           kSingle,  kError,    kAnalysis, ""), \
   F(fuchsia_non_numeric_counters,         kSingle,  kError,    kAnalysis, ""), \
   F(fuchsia_timestamp_overflow,           kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_record_read_error,            kSingle,  kError,    kAnalysis, ""), \
   F(fuchsia_invalid_event,                kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_invalid_event_arg_type,       kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_invalid_event_arg_name,       kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_unknown_event_arg,            kSingle,  kError,    kAnalysis, ""), \
+  F(fuchsia_invalid_string_ref,           kSingle,  kError,    kAnalysis, ""), \
+  F(generic_task_state_invalid_order,     kSingle,  kError,    kAnalysis,      \
+       "Invalid order of generic task state events. Should never happen."),    \
   F(gpu_counters_invalid_spec,            kSingle,  kError,    kAnalysis, ""), \
   F(gpu_counters_missing_spec,            kSingle,  kError,    kAnalysis, ""), \
   F(gpu_render_stage_parser_errors,       kSingle,  kError,    kAnalysis, ""), \
@@ -99,6 +106,26 @@ namespace perfetto::trace_processor::stats {
   F(interned_data_tokenizer_errors,       kSingle,  kInfo,     kAnalysis, ""), \
   F(invalid_clock_snapshots,              kSingle,  kError,    kAnalysis, ""), \
   F(invalid_cpu_times,                    kSingle,  kError,    kAnalysis, ""), \
+  F(kernel_wakelock_reused_id,            kSingle,  kError,    kAnalysis,      \
+       "Duplicated interning ID seen. Should never happen."),                  \
+  F(kernel_wakelock_unknown_id,           kSingle,  kError,    kAnalysis,      \
+       "Interning ID not found. Should never happen."),                        \
+  F(kernel_wakelock_zero_value_reported,  kSingle,  kDataLoss, kTrace,         \
+       "Zero value received from SuspendControlService. Indicates a transient "\
+       "error in SuspendControlService."),                                     \
+  F(kernel_wakelock_non_monotonic_value_reported,                              \
+                                          kSingle,  kDataLoss, kTrace,         \
+       "Decreased value received from SuspendControlService. Indicates a "     \
+       "transient error in SuspendControlService."),                           \
+  F(kernel_wakelock_implausibly_large_value_reported,                          \
+                                          kSingle,  kDataLoss, kTrace,         \
+       "Implausibly large increment to value received from "                   \
+       "SuspendControlService. Indicates a transient error in "                \
+       "SuspendControlService."),                                              \
+  F(app_wakelock_parse_error,             kSingle,  kError,    kAnalysis,      \
+       "Parsing packed repeated field. Should never happen."),                 \
+  F(app_wakelock_unknown_id,              kSingle,  kError,    kAnalysis,      \
+       "Interning ID not found. Should never happen."),                        \
   F(meminfo_unknown_keys,                 kSingle,  kError,    kAnalysis, ""), \
   F(mismatched_sched_switch_tids,         kSingle,  kError,    kAnalysis, ""), \
   F(mm_unknown_type,                      kSingle,  kError,    kAnalysis, ""), \
@@ -188,6 +215,9 @@ namespace perfetto::trace_processor::stats {
   F(traced_buf_write_wrap_count,          kIndexed, kInfo,     kTrace,    ""), \
   F(traced_clone_started_timestamp_ns,    kSingle,  kInfo,     kTrace,         \
     "The timestamp when the clone snapshot operation for this trace started"), \
+  F(traced_clone_trigger_timestamp_ns,    kSingle,  kInfo,     kTrace,         \
+    "The timestamp when trigger for the clone snapshot operation for this "    \
+    "trace was received"), \
   F(traced_chunks_discarded,              kSingle,  kInfo,     kTrace,    ""), \
   F(traced_data_sources_registered,       kSingle,  kInfo,     kTrace,    ""), \
   F(traced_data_sources_seen,             kSingle,  kInfo,     kTrace,    ""), \
@@ -383,31 +413,31 @@ namespace perfetto::trace_processor::stats {
   F(v8_code_load_missing_code_range,      kSingle,  kError,    kAnalysis,      \
       "V8 load had no code range or an empty one. Event ignored."),            \
   F(winscope_inputmethod_clients_parse_errors,                                 \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "InputMethod clients packet has unknown fields, which results in "       \
       "some arguments missing. You may need a newer version of trace "         \
       "processor to parse them."),                                             \
   F(winscope_inputmethod_manager_service_parse_errors,                         \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "InputMethod manager service packet has unknown fields, which results "  \
       "in some arguments missing. You may need a newer version of trace "      \
       "processor to parse them."),                                             \
   F(winscope_inputmethod_service_parse_errors,                                 \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "InputMethod service packet has unknown fields, which results in "       \
       "some arguments missing. You may need a newer version of trace "         \
       "processor to parse them."),                                             \
-  F(winscope_sf_layers_parse_errors,      kSingle,  kInfo,     kAnalysis,      \
+  F(winscope_sf_layers_parse_errors,      kSingle,  kError,    kAnalysis,      \
       "SurfaceFlinger layers snapshot has unknown fields, which results in "   \
       "some arguments missing. You may need a newer version of trace "         \
       "processor to parse them."),                                             \
   F(winscope_sf_transactions_parse_errors,                                     \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "SurfaceFlinger transactions packet has unknown fields, which results "  \
       "in some arguments missing. You may need a newer version of trace "      \
       "processor to parse them."),                                             \
   F(winscope_shell_transitions_parse_errors,                                   \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "Shell transition packet has unknown fields, which results "             \
       "in some arguments missing. You may need a newer version of trace "      \
       "processor to parse them."),                                             \
@@ -427,14 +457,14 @@ namespace perfetto::trace_processor::stats {
                                           kSingle,  kInfo,     kAnalysis,      \
       "Got a viewer config collision!"),                                       \
   F(winscope_viewcapture_parse_errors,                                         \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "ViewCapture packet has unknown fields, which results in some "          \
       "arguments missing. You may need a newer version of trace processor "    \
       "to parse them."),                                                       \
   F(winscope_viewcapture_missing_interned_string_parse_errors,                 \
-                                          kSingle,  kInfo,     kAnalysis,      \
+                                          kSingle,  kError,    kAnalysis,      \
       "Failed to find interned ViewCapture string."),                          \
-  F(winscope_windowmanager_parse_errors, kSingle,  kInfo,     kAnalysis,       \
+  F(winscope_windowmanager_parse_errors, kSingle,   kError,    kAnalysis,      \
       "WindowManager state packet has unknown fields, which results "          \
       "in some arguments missing. You may need a newer version of trace "      \
       "processor to parse them."),                                             \
@@ -453,11 +483,13 @@ namespace perfetto::trace_processor::stats {
       "An invalid Mali GPU MCU state ID was detected."),                       \
   F(pixel_modem_negative_timestamp,       kSingle,  kError,   kAnalysis,       \
       "A negative timestamp was received from a Pixel modem event."),          \
-  F(legacy_v8_cpu_profile_invalid_callsite, kSingle,  kInfo,  kAnalysis,       \
-      "Indicates a callsite in legacy v8 CPU profiling is invalid."),          \
-  F(legacy_v8_cpu_profile_invalid_sample, kSingle,  kError,  kAnalysis,        \
+  F(legacy_v8_cpu_profile_invalid_callsite, kSingle, kError,  kTrace,          \
+      "Indicates a callsite in legacy v8 CPU profiling is invalid. This is "   \
+      "a sign that the trace is malformed."),                                  \
+  F(legacy_v8_cpu_profile_invalid_sample, kSingle,  kError,  kTrace,           \
       "Indicates a sample in legacy v8 CPU profile is invalid. This will "     \
-      "cause CPU samples to be missing in the UI."),                           \
+      "cause CPU samples to be missing in the UI. This is a sign that the "    \
+      "trace is malformed."),                                                  \
   F(config_write_into_file_no_flush,      kSingle,  kError,  kTrace,           \
       "The trace was collected with the `write_into_file` option set but "     \
       "*without* `flush_period_ms` being set. This will cause the trace to "   \
@@ -467,7 +499,72 @@ namespace perfetto::trace_processor::stats {
       "The trace was collected with the `write_into_file` option set but "     \
       "uses a `DISCARD` buffer. This configuration is strongly discouraged "   \
       "and can cause mysterious data loss in the trace. Please use "           \
-      "`RING_BUFFER` buffers instead.")
+      "`RING_BUFFER` buffers instead."),                                       \
+   F(hprof_string_counter,                 kSingle,  kInfo,   kAnalysis,       \
+         "Number of strings encountered."),                                    \
+   F(hprof_class_counter,                  kSingle,  kInfo,   kAnalysis,       \
+         "Number of classes encountered."),                                    \
+   F(hprof_heap_dump_counter,              kSingle,  kInfo,   kAnalysis,       \
+         "Number of heap dumps encountered."),                                 \
+   F(hprof_instance_counter,               kSingle,  kInfo,   kAnalysis,       \
+         "Number of instances encountered."),                                  \
+   F(hprof_object_array_counter,           kSingle,  kInfo,   kAnalysis,       \
+         "Number of object arrays encountered."),                              \
+  F(hprof_primitive_array_counter,         kSingle,  kInfo,   kAnalysis,       \
+        "Number of primitive arrays encountered."),                            \
+  F(hprof_root_counter,                    kSingle,  kInfo,   kAnalysis,       \
+        "Number of roots encountered."),                                       \
+  F(hprof_reference_counter,               kSingle,  kInfo,   kAnalysis,       \
+        "Number of references encountered."),                                  \
+  F(hprof_record_counter,                  kSingle,  kInfo,   kAnalysis,       \
+        "Total number of records parsed."),                                    \
+  F(hprof_field_value_errors,              kSingle,  kError,   kAnalysis,      \
+      "Number of field value parsing errors. This indicates a malformed "      \
+      "hprof file. Check if the hprof opens correctly in a tool like "         \
+      "AHAT. Missing values could yield incorrect native object sizes."),      \
+  F(hprof_class_errors,                    kSingle,  kError,   kAnalysis,      \
+      "Number of class parsing errors encountered. This indicates a "          \
+      "malformed hprof file. Check if the hprof opens correctly in a tool "    \
+      "like AHAT. Missing classes could cause missing references, thus "       \
+      "affecting the overall size of the the heap graph."),                    \
+  F(hprof_header_errors,                   kSingle,  kError,   kAnalysis,      \
+      "Number of header parsing errors. This indicates a malformed hprof "     \
+      "file with invalid or missing header information. The file may be "      \
+      "corrupted or might not be a valid hprof file. There may not be any "    \
+      "heap graph data parsed."),                                              \
+  F(hprof_heap_dump_errors,                kSingle,  kError,   kAnalysis,      \
+      "Number of heap dump parsing errors. This indicates a malformed "        \
+      "hprof file with corrupted heap segments. Check if the hprof opens "     \
+      "correctly in a tool like AHAT. Missing heap dump sections can lead to " \
+      "huge clusters of the heap graph missing, thus affecting the overall "   \
+      "size of the graph"),                                                    \
+  F(hprof_primitive_array_parsing_errors,  kSingle,  kError,   kAnalysis,      \
+      "Number of primitive array parsing errors. This indicates a "            \
+      "malformed hprof file. Check if the hprof opens correctly in a tool "    \
+      "like AHAT. Primitive arrays like bytes[] missing can dramatically "     \
+      "affect the overall size of the heap graph."),                           \
+  F(hprof_reference_errors,                kSingle,  kError,   kAnalysis,      \
+      "Number of object reference errors encountered. This indicates a "       \
+      "malformed hprof file. Check if the hprof opens correctly in a tool "    \
+      "like AHAT. Missing references will affect the overall size of the "     \
+      "heap graph."),                                                          \
+  F(trace_sorter_negative_timestamp_dropped,       kSingle,  kError,   kTrace, \
+      "A negative timestamp was received by the TraceSorter and was dropped. " \
+      "Negative timestamps are not supported by trace processor and "          \
+      "the presence of one is usually a sign that something went wrong while " \
+      "recording a trace. Common causes of this include incorrect "            \
+      "incremental timestamps, bad clock synchronization or kernel bugs in "   \
+      "drivers emitting timestamps"),                                          \
+  F(slice_drop_overlapping_complete_event,        kSingle,  kError,  kTrace,   \
+      "A complete slice was dropped because it overlaps with another "         \
+      "slice. This can happen e.g. in JSON traces using X events or in other " \
+      "cases where a duration is part of the trace. To solve this problem "    \
+      "make sure that your X events do not overlap on the same track (e.g. "   \
+      "thread/process)"),                                                      \
+  F(perf_text_importer_sample_no_frames,        kSingle,  kError,  kTrace,     \
+      "A perf sample was encountered that has no frames. This can happen "     \
+      "if the kernel is unable to unwind the stack while sampling. Check "     \
+      "Linux kernel documentation for causes of this and potential fixes.")
 // clang-format on
 
 enum Type {
@@ -492,9 +589,19 @@ enum Source {
   kAnalysis
 };
 
-// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #if defined(__GNUC__) || defined(__clang__)
+#if defined(__clang__)
+#pragma clang diagnostic push
+// Fix 'error: #pragma system_header ignored in main file' for clang in Google3.
+#pragma clang diagnostic ignored "-Wpragma-system-header-outside-header"
+#endif
+
+// Ignore GCC warning about a missing argument for a variadic macro parameter.
 #pragma GCC system_header
+
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 #endif
 
 // Declares an enum of literals (one for each stat). The enum values of each

@@ -23,6 +23,7 @@
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/status.h"
+#include "perfetto/ext/base/status_macros.h"
 #include "perfetto/trace_processor/trace_blob.h"
 #include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/importers/etm/etm_v4_stream_demultiplexer.h"
@@ -30,7 +31,6 @@
 #include "src/trace_processor/importers/etm/opencsd.h"
 #include "src/trace_processor/importers/etm/storage_handle.h"
 #include "src/trace_processor/importers/perf/util.h"
-#include "src/trace_processor/util/status_macros.h"
 
 namespace perfetto::trace_processor::etm {
 namespace {
@@ -71,7 +71,9 @@ base::Status EtmV4Stream::ParseFramedData(uint64_t offset, TraceBlobView data) {
                                    data.data(), &num_bytes_processed));
   PERFETTO_CHECK(keep_going);
   PERFETTO_CHECK(num_bytes_processed == data_block_size);
-  PERFETTO_CHECK(perf_importer::SafeAdd(index_, data_block_size, &index_));
+  PERFETTO_CHECK(index_ <= std::numeric_limits<decltype(index_)>::max() -
+                               data_block_size);
+  index_ += data_block_size;
 
   ASSIGN_OR_RETURN(keep_going, frame_decoder_->TraceDataIn(
                                    OCSD_OP_EOT, index_, 0, nullptr, nullptr));

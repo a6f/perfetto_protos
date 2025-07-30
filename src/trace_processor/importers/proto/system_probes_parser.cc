@@ -39,6 +39,7 @@
 #include "src/trace_processor/importers/common/clock_tracker.h"
 #include "src/trace_processor/importers/common/cpu_tracker.h"
 #include "src/trace_processor/importers/common/event_tracker.h"
+#include "src/trace_processor/importers/common/machine_tracker.h"
 #include "src/trace_processor/importers/common/metadata_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
 #include "src/trace_processor/importers/common/system_info_tracker.h"
@@ -55,10 +56,10 @@
 #include "src/trace_processor/types/variadic.h"
 
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
+#include "protos/perfetto/common/system_info.pbzero.h"
 #include "protos/perfetto/trace/ps/process_stats.pbzero.h"
 #include "protos/perfetto/trace/ps/process_tree.pbzero.h"
 #include "protos/perfetto/trace/sys_stats/sys_stats.pbzero.h"
-#include "protos/perfetto/trace/system_info.pbzero.h"
 #include "protos/perfetto/trace/system_info/cpu_info.pbzero.h"
 
 namespace perfetto::trace_processor {
@@ -226,6 +227,7 @@ const char* GetSmapsKey(uint32_t field_id) {
 SystemProbesParser::SystemProbesParser(TraceProcessorContext* context)
     : context_(context),
       utid_name_id_(context->storage->InternString("utid")),
+      is_kthread_id_(context->storage->InternString("is_kthread")),
       arm_cpu_implementer(
           context->storage->InternString("arm_cpu_implementer")),
       arm_cpu_architecture(
@@ -418,6 +420,8 @@ void SystemProbesParser::ParseSysStats(int64_t ts, ConstBytes blob) {
                                          intern_track("irq_ns"));
     context_->event_tracker->PushCounter(
         ts, static_cast<double>(ct.softirq_ns()), intern_track("softirq_ns"));
+    context_->event_tracker->PushCounter(ts, static_cast<double>(ct.steal_ns()),
+                                         intern_track("steal_ns"));
   }
 
   for (auto it = sys_stats.num_irq(); it; ++it) {
@@ -559,18 +563,25 @@ void SystemProbesParser::ParseSysStats(int64_t ts, ConstBytes blob) {
 }
 
 void SystemProbesParser::ParseCpuIdleStats(int64_t ts, ConstBytes blob) {
-  static constexpr auto kBlueprint = tracks::CounterBlueprint(
-      "cpu_idle_state", tracks::UnknownUnitBlueprint(),
-      tracks::DimensionBlueprints(
-          tracks::kCpuDimensionBlueprint,
-          tracks::StringDimensionBlueprint("cpu_idle_state")));
-
   protos::pbzero::SysStats::CpuIdleState::Decoder cpuidle_state(blob);
   uint32_t cpu = cpuidle_state.cpu_id();
+  static constexpr auto kBlueprint = tracks::CounterBlueprint(
+      "cpu_idle_state", tracks::StaticUnitBlueprint("us"),
+      tracks::DimensionBlueprints(tracks::kCpuDimensionBlueprint,
+                                  tracks::StringDimensionBlueprint("state")),
+      tracks::FnNameBlueprint([](uint32_t cpu, base::StringView state) {
+        return base::StackString<1024>("cpuidle%u.%.*s", cpu, int(state.size()),
+                                       state.data());
+      }));
+
   for (auto f = cpuidle_state.cpuidle_state_entry(); f; ++f) {
     protos::pbzero::SysStats::CpuIdleStateEntry::Decoder idle(*f);
-    TrackId track =
-        context_->track_tracker->InternTrack(kBlueprint, {cpu, idle.state()});
+    std::string state_name = idle.state().ToStdString();
+
+    TrackId track = context_->track_tracker->InternTrack(
+        kBlueprint, tracks::Dimensions(cpu, state_name.c_str()),
+        tracks::BlueprintName());
+
     context_->event_tracker->PushCounter(
         ts, static_cast<double>(idle.duration_us()), track);
   }
@@ -587,9 +598,9 @@ void SystemProbesParser::ParseProcessTree(ConstBytes blob) {
     auto ppid = static_cast<uint32_t>(proc.ppid());
 
     if (proc.has_nspid()) {
-      std::vector<uint32_t> nspid;
+      std::vector<int64_t> nspid;
       for (auto nspid_it = proc.nspid(); nspid_it; nspid_it++) {
-        nspid.emplace_back(static_cast<uint32_t>(*nspid_it));
+        nspid.emplace_back(static_cast<int64_t>(*nspid_it));
       }
       context_->process_tracker->UpdateNamespacedProcess(pid, std::move(nspid));
     }
@@ -663,6 +674,12 @@ void SystemProbesParser::ParseProcessTree(ConstBytes blob) {
         context_->process_tracker->SetStartTsIfUnset(upid, *start_ts);
       }
     }
+
+    // Linux v6.4+: explicit field for whether this is a kernel thread.
+    if (proc.has_is_kthread()) {
+      context_->process_tracker->AddArgsTo(upid).AddArg(
+          is_kthread_id_, Variadic::Boolean(proc.is_kthread()));
+    }
   }
 
   for (auto it = ps.threads(); it; ++it) {
@@ -678,9 +695,9 @@ void SystemProbesParser::ParseProcessTree(ConstBytes blob) {
     }
 
     if (thd.has_nstid()) {
-      std::vector<uint32_t> nstid;
+      std::vector<int64_t> nstid;
       for (auto nstid_it = thd.nstid(); nstid_it; nstid_it++) {
-        nstid.emplace_back(static_cast<uint32_t>(*nstid_it));
+        nstid.emplace_back(static_cast<int64_t>(*nstid_it));
       }
       context_->process_tracker->UpdateNamespacedThread(tgid, tid,
                                                         std::move(nstid));
@@ -815,6 +832,7 @@ void SystemProbesParser::ParseProcessFds(int64_t ts,
 
 void SystemProbesParser::ParseSystemInfo(ConstBytes blob) {
   protos::pbzero::SystemInfo::Decoder packet(blob);
+  MachineTracker* machine_tracker = context_->machine_tracker.get();
   SystemInfoTracker* system_info_tracker =
       SystemInfoTracker::GetOrCreate(context_);
   if (packet.has_utsname()) {
@@ -841,6 +859,9 @@ void SystemProbesParser::ParseSystemInfo(ConstBytes blob) {
     StringPool::Id machine_id =
         context_->storage->InternString(utsname.machine());
 
+    machine_tracker->SetMachineInfo(sysname_id, release_id, version_id,
+                                    machine_id);
+
     MetadataTracker* metadata = context_->metadata_tracker.get();
     metadata->SetMetadata(metadata::system_name, Variadic::String(sysname_id));
     metadata->SetMetadata(metadata::system_version,
@@ -862,17 +883,21 @@ void SystemProbesParser::ParseSystemInfo(ConstBytes blob) {
   }
 
   if (packet.has_android_build_fingerprint()) {
+    auto android_build_fingerprint =
+        context_->storage->InternString(packet.android_build_fingerprint());
     context_->metadata_tracker->SetMetadata(
         metadata::android_build_fingerprint,
-        Variadic::String(context_->storage->InternString(
-            packet.android_build_fingerprint())));
+        Variadic::String(android_build_fingerprint));
+    machine_tracker->SetAndroidBuildFingerprint(android_build_fingerprint);
   }
 
   if (packet.has_android_device_manufacturer()) {
+    auto android_device_manufacturer =
+        context_->storage->InternString(packet.android_device_manufacturer());
     context_->metadata_tracker->SetMetadata(
         metadata::android_device_manufacturer,
-        Variadic::String(context_->storage->InternString(
-            packet.android_device_manufacturer())));
+        Variadic::String(android_device_manufacturer));
+    machine_tracker->SetAndroidDeviceManufacturer(android_device_manufacturer);
   }
 
   // If we have the SDK version in the trace directly just use that.
@@ -888,6 +913,7 @@ void SystemProbesParser::ParseSystemInfo(ConstBytes blob) {
   if (opt_sdk_version) {
     context_->metadata_tracker->SetMetadata(
         metadata::android_sdk_version, Variadic::Integer(*opt_sdk_version));
+    machine_tracker->SetAndroidSdkVersion(*opt_sdk_version);
   }
 
   if (packet.has_android_soc_model()) {
@@ -925,12 +951,20 @@ void SystemProbesParser::ParseSystemInfo(ConstBytes blob) {
             context_->storage->InternString(packet.android_ram_model())));
   }
 
+  if (packet.has_android_serial_console()) {
+    context_->metadata_tracker->SetMetadata(
+        metadata::android_serial_console,
+        Variadic::String(
+            context_->storage->InternString(packet.android_serial_console())));
+  }
+
   page_size_ = packet.page_size();
   if (!page_size_) {
     page_size_ = 4096;
   }
 
   if (packet.has_num_cpus()) {
+    machine_tracker->SetNumCpus(packet.num_cpus());
     system_info_tracker->SetNumCpus(packet.num_cpus());
   }
 }

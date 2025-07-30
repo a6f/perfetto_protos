@@ -97,6 +97,9 @@ message ScenarioConfig {
   // Scenario name, unique within the whole field tracing config.
   optional string scenario_name = 1;
 
+  // Short scenario description, displayed in Chrome internal UI.
+  optional string scenario_description = 9;
+
   // When triggered, this scenario becomes active. Initializes a tracing session
   // and starts recording data sources. This activates `upload_rules` and
   // `stop_rules`.
@@ -116,6 +119,10 @@ message ScenarioConfig {
   optional TraceConfig trace_config = 6;
 
   repeated NestedScenarioConfig nested_scenarios = 7;
+
+  // When set to true, this scenario initiates a tracing session using the
+  // system backend instead of the default in-browser custom backend.
+  optional bool use_system_backend = 8;
 }
 
 message ChromeFieldTracingConfig {

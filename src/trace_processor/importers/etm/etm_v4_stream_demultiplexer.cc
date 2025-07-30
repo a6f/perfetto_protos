@@ -25,6 +25,7 @@
 #include "perfetto/base/flat_set.h"
 #include "perfetto/base/status.h"
 #include "perfetto/ext/base/flat_hash_map.h"
+#include "perfetto/ext/base/status_macros.h"
 #include "perfetto/ext/base/status_or.h"
 #include "src/trace_processor/importers/etm/etm_tracker.h"
 #include "src/trace_processor/importers/etm/etm_v4_stream.h"
@@ -37,7 +38,6 @@
 #include "src/trace_processor/importers/perf/reader.h"
 #include "src/trace_processor/importers/perf/util.h"
 #include "src/trace_processor/tables/etm_tables_py.h"
-#include "src/trace_processor/util/status_macros.h"
 
 namespace perfetto::trace_processor::etm {
 namespace {
@@ -130,15 +130,16 @@ ReadCpuConfig(perf_importer::Reader& reader) {
   }
 
   uint32_t cpu;
-  if (!perf_importer::SafeAdd(cpu_header.cpu, 0, &cpu)) {
+  if (!perf_importer::SafeCast(cpu_header.cpu, &cpu)) {
     return base::ErrStatus("Integer overflow in ETM info header");
   }
 
   uint32_t size;
-  if (!perf_importer::SafeMultiply(cpu_header.trace_parameter_count, 8,
-                                   &size)) {
+  if (cpu_header.trace_parameter_count >
+      std::numeric_limits<uint32_t>::max() / 8) {
     return base::ErrStatus("Integer overflow in ETM info header");
   }
+  size = static_cast<uint32_t>(cpu_header.trace_parameter_count * 8);
 
   TraceBlobView blob;
   if (!reader.ReadBlob(blob, size)) {

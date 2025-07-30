@@ -117,6 +117,8 @@ class Profiling(TestSuite):
               name: "system_server"
               uid: 1000
               pid: 2
+              android_user_id: 0
+              is_kernel_task: false
             }
             mappings {
               path: "[anon: libc_malloc]"
@@ -261,9 +263,8 @@ class Profiling(TestSuite):
                pct.name AS cntr_name, pct.is_timebase,
                thread.tid,
                spf.name
-        FROM experimental_annotated_callstack eac
-        JOIN perf_sample ps
-          ON (eac.start_id = ps.callsite_id)
+        FROM perf_sample ps
+        JOIN experimental_annotated_callstack(ps.callsite_id) eac
         JOIN perf_counter_track pct
           USING(perf_session_id, cpu)
         JOIN thread
@@ -282,9 +283,8 @@ class Profiling(TestSuite):
                pct.name AS cntr_name, pct.is_timebase,
                thread.tid,
                spf.name
-        FROM experimental_annotated_callstack eac
-        JOIN perf_sample ps
-          ON (eac.start_id = ps.callsite_id)
+        FROM perf_sample ps
+        JOIN experimental_annotated_callstack(ps.callsite_id) eac
         JOIN perf_counter_track pct
           USING(perf_session_id, cpu)
         JOIN thread
@@ -302,15 +302,14 @@ class Profiling(TestSuite):
         select
           eac.depth, eac.annotation, spm.name as map_name,
           ifnull(demangle(spf.name), spf.name) as frame_name
-        from experimental_annotated_callstack eac
-          join stack_profile_frame spf on (eac.frame_id = spf.id)
-          join stack_profile_mapping spm on (spf.mapping = spm.id)
-        where eac.start_id = (
+        from experimental_annotated_callstack((
           select spc.id as callsite_id
           from stack_profile_callsite spc
           join stack_profile_frame spf on (spc.frame_id = spf.id)
-          where spf.name = "_ZN3art28ResolveFieldWithAccessChecksEPNS_6ThreadEPNS_11ClassLinkerEtPNS_9ArtMethodEbbm")
-          and depth != 10  -- Skipped because cause symbolization issues on clang vs gcc due to llvm-demangle
+          where spf.name = "_ZN3art28ResolveFieldWithAccessChecksEPNS_6ThreadEPNS_11ClassLinkerEtPNS_9ArtMethodEbbm")) eac
+          join stack_profile_frame spf on (eac.frame_id = spf.id)
+          join stack_profile_mapping spm on (spf.mapping = spm.id)
+        where depth != 10  -- Skipped because cause symbolization issues on clang vs gcc due to llvm-demangle
         order by depth asc;
         """,
         out=Csv("""
@@ -351,10 +350,9 @@ class Profiling(TestSuite):
         select
           eac.depth, eac.annotation, spm.name as map_name,
           ifnull(demangle(spf.name), spf.name) as frame_name
-        from experimental_annotated_callstack eac
+        from experimental_annotated_callstack((select callsite_id from perf_sample)) eac
           join stack_profile_frame spf on (eac.frame_id = spf.id)
           join stack_profile_mapping spm on (spf.mapping = spm.id)
-        where eac.start_id = (select callsite_id from perf_sample)
         order by depth asc;
         """,
         out=Csv("""
@@ -364,4 +362,117 @@ class Profiling(TestSuite):
         2,"common-frame-interp","/apex/com.android.art/lib64/libart.so","void art::interpreter::ExecuteSwitchImplCpp<false>(art::interpreter::SwitchImplContext*)"
         3,"common-frame-interp","/apex/com.android.art/lib64/libart.so","bool art::interpreter::DoCall<true>(art::ArtMethod*, art::Thread*, art::ShadowFrame&, art::Instruction const*, unsigned short, bool, art::JValue*)"
         4,"common-frame","/apex/com.android.art/lib64/libart.so","art::ArtMethod::Invoke(art::Thread*, unsigned int*, unsigned int, art::JValue*, char const*)"
+        """))
+
+  def test_perf_sample_followers(self):
+    return DiffTestBlueprint(
+        trace=TextProto(r"""
+        packet {
+          clock_snapshot {
+            primary_trace_clock: BUILTIN_CLOCK_BOOTTIME
+            clocks {
+              clock_id: 6
+              timestamp: 273574904041306
+            }
+            clocks {
+              clock_id: 2
+              timestamp: 1737644264730557105
+            }
+            clocks {
+              clock_id: 4
+              timestamp: 106208706668231
+            }
+            clocks {
+              clock_id: 1
+              timestamp: 1737644264734590878
+            }
+            clocks {
+              clock_id: 3
+              timestamp: 106208710702167
+            }
+            clocks {
+              clock_id: 5
+              timestamp: 106208710702494
+            }
+          }
+          trusted_packet_sequence_id: 1
+        }
+        packet {
+          first_packet_on_sequence: true
+          timestamp: 273574983771490
+          timestamp_clock_id: 6
+          sequence_flags: 1
+          trace_packet_defaults {
+            timestamp_clock_id: 3
+            perf_sample_defaults {
+              timebase {
+                frequency: 100
+                counter: SW_CPU_CLOCK
+              }
+              followers {
+                counter: HW_CPU_CYCLES
+              }
+              followers {
+                counter: HW_INSTRUCTIONS
+              }
+            }
+          }
+          trusted_packet_sequence_id: 4
+          previous_packet_dropped: true
+        }
+        packet {
+          interned_data {
+            build_ids {
+              iid: 0
+              str: ""
+            }
+            mapping_paths {
+              iid: 0
+              str: ""
+            }
+            function_names {
+              iid: 0
+              str: ""
+            }
+          }
+          sequence_flags: 2
+          trusted_packet_sequence_id: 4
+        }
+        packet {
+          sequence_flags: 2
+          timestamp: 106208800213886
+          interned_data {
+            callstacks {
+              iid: 1
+            }
+          }
+          perf_sample {
+            cpu: 0
+            pid: 0
+            tid: 0
+            cpu_mode: MODE_KERNEL
+            timebase_count: 10020141
+            follower_counts: 4672142
+            follower_counts: 1144537
+            callstack_iid: 1
+          }
+          trusted_packet_sequence_id: 4
+        }
+        """),
+        query="""
+        select
+          c.ts,
+          c.value,
+          pct.cpu,
+          pct.perf_session_id,
+          pct.is_timebase
+        from
+          counter c join perf_counter_track pct on c.track_id = pct.id
+        order by ts, c.id
+        """,
+        out=Csv("""
+        "ts","value","cpu","perf_session_id","is_timebase"
+        273574993553025,10020141.000000,0,0,1
+        273574993553025,4672142.000000,0,0,0
+        273574993553025,1144537.000000,0,0,0
         """))

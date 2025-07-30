@@ -32,6 +32,16 @@ export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
     group: 'Battery Stats',
   },
   {
+    type: 'bluetooth_trace_event',
+    topLevelGroup: 'SYSTEM',
+    group: 'Bluetooth',
+  },
+  {
+    type: 'app_wakelock_events',
+    topLevelGroup: 'POWER',
+    group: 'App Wakelocks',
+  },
+  {
     type: 'legacy_async_process_slice',
     topLevelGroup: 'PROCESS',
     group: undefined,
@@ -67,6 +77,16 @@ export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
     group: 'DRM VBlank',
   },
   {
+    type: 'disp_dpu_underrun',
+    topLevelGroup: 'HARDWARE',
+    group: 'Display',
+  },
+  {
+    type: 'disp_vblank_irq_enable',
+    topLevelGroup: 'HARDWARE',
+    group: 'Display',
+  },
+  {
     type: 'drm_sched_ring',
     topLevelGroup: 'HARDWARE',
     group: 'DRM Sched Ring',
@@ -90,6 +110,11 @@ export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
     type: 'cpu_softirq',
     topLevelGroup: 'CPU',
     group: 'Softirqs',
+  },
+  {
+    type: 'cpu_hrtimer',
+    topLevelGroup: 'CPU',
+    group: 'HRTimers',
   },
   {
     type: 'net_socket_set_state',
@@ -223,6 +248,11 @@ export const SLICE_TRACK_SCHEMAS: ReadonlyArray<SliceTrackTypeSchema> = [
   },
   {
     type: 'thread_execution',
+    topLevelGroup: 'THREAD',
+    group: undefined,
+  },
+  {
+    type: 'thread_funcgraph',
     topLevelGroup: 'THREAD',
     group: undefined,
   },

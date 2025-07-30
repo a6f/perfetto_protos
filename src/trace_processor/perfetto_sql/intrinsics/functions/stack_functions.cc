@@ -27,6 +27,7 @@
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/status.h"
+#include "perfetto/ext/base/status_macros.h"
 #include "perfetto/protozero/scattered_heap_buffer.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "perfetto/trace_processor/status.h"
@@ -36,7 +37,6 @@
 #include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/types/trace_processor_context.h"
-#include "src/trace_processor/util/status_macros.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -44,7 +44,7 @@ namespace {
 
 using protos::pbzero::Stack;
 
-util::Status SetBytesOutputValue(const std::vector<uint8_t>& src,
+base::Status SetBytesOutputValue(const std::vector<uint8_t>& src,
                                  SqlValue& out,
                                  SqlFunction::Destructors& destructors) {
   void* dest = malloc(src.size());
@@ -54,7 +54,7 @@ util::Status SetBytesOutputValue(const std::vector<uint8_t>& src,
   memcpy(dest, src.data(), src.size());
   out = SqlValue::Bytes(dest, src.size());
   destructors.bytes_destructor = free;
-  return util::OkStatus();
+  return base::OkStatus();
 }
 
 // CAT_STACKS(root BLOB/STRING, level_1 BLOB/STRING, …, leaf BLOB/STRING)
@@ -223,7 +223,7 @@ struct StackFromStackProfileFrameFunction : public SqlFunction {
     }
 
     if (value->is_null()) {
-      return util::OkStatus();
+      return base::OkStatus();
     }
 
     if (value->AsLong() > std::numeric_limits<uint32_t>::max() ||

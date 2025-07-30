@@ -41,7 +41,6 @@
 #include "perfetto/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/containers/null_term_string_view.h"
 #include "src/trace_processor/containers/string_pool.h"
-#include "src/trace_processor/db/column/types.h"
 #include "src/trace_processor/db/typed_column_internal.h"
 #include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/tables/android_tables_py.h"
@@ -228,7 +227,7 @@ class TraceStorage {
   };
   using StatsMap = std::array<Stats, stats::kNumKeys>;
 
-  // Return an unqiue identifier for the contents of each string.
+  // Return an unique identifier for the contents of each string.
   // The string is copied internally and can be destroyed after this called.
   // Virtual for testing.
   virtual StringId InternString(base::StringView str) {
@@ -330,28 +329,14 @@ class TraceStorage {
 
   // Reading methods.
   // Virtual for testing.
-  virtual NullTermStringView GetString(StringId id) const {
-    return string_pool_.Get(id);
+  virtual NullTermStringView GetString(std::optional<StringId> id) const {
+    return id ? string_pool_.Get(*id) : NullTermStringView();
   }
 
   // Requests the removal of unused capacity.
   // Matches the semantics of std::vector::shrink_to_fit.
   void ShrinkToFitTables() {
-    // At the moment, we only bother calling ShrinkToFit on a set group
-    // of tables. If we wanted to extend this to every table, we'd need to deal
-    // with tracking all the tables in the storage: this is not worth doing
-    // given most memory is used by these tables.
-    thread_table_.ShrinkToFit();
-    process_table_.ShrinkToFit();
-    track_table_.ShrinkToFit();
-    counter_table_.ShrinkToFit();
-    slice_table_.ShrinkToFit();
-    ftrace_event_table_.ShrinkToFit();
-    sched_slice_table_.ShrinkToFit();
-    thread_state_table_.ShrinkToFit();
-    arg_table_.ShrinkToFit();
-    heap_graph_object_table_.ShrinkToFit();
-    heap_graph_reference_table_.ShrinkToFit();
+    // TODO(lalitm): remove.
   }
 
   const tables::ThreadTable& thread_table() const { return thread_table_; }
@@ -797,6 +782,14 @@ class TraceStorage {
     return &surfaceflinger_layers_snapshot_table_;
   }
 
+  const tables::SurfaceFlingerDisplayTable& surfaceflinger_display_table()
+      const {
+    return surfaceflinger_display_table_;
+  }
+  tables::SurfaceFlingerDisplayTable* mutable_surfaceflinger_display_table() {
+    return &surfaceflinger_display_table_;
+  }
+
   const tables::SurfaceFlingerLayerTable& surfaceflinger_layer_table() const {
     return surfaceflinger_layer_table_;
   }
@@ -813,11 +806,45 @@ class TraceStorage {
     return &surfaceflinger_transactions_table_;
   }
 
+  const tables::SurfaceFlingerTransactionTable&
+  surfaceflinger_transaction_table() const {
+    return surfaceflinger_transaction_table_;
+  }
+  tables::SurfaceFlingerTransactionTable*
+  mutable_surfaceflinger_transaction_table() {
+    return &surfaceflinger_transaction_table_;
+  }
+
+  const tables::SurfaceFlingerTransactionFlagTable&
+  surfaceflinger_transaction_flag_table() const {
+    return surfaceflinger_transaction_flag_table_;
+  }
+  tables::SurfaceFlingerTransactionFlagTable*
+  mutable_surfaceflinger_transaction_flag_table() {
+    return &surfaceflinger_transaction_flag_table_;
+  }
+
   const tables::ViewCaptureTable& viewcapture_table() const {
     return viewcapture_table_;
   }
   tables::ViewCaptureTable* mutable_viewcapture_table() {
     return &viewcapture_table_;
+  }
+
+  const tables::ViewCaptureViewTable& viewcapture_view_table() const {
+    return viewcapture_view_table_;
+  }
+  tables::ViewCaptureViewTable* mutable_viewcapture_view_table() {
+    return &viewcapture_view_table_;
+  }
+
+  const tables::ViewCaptureInternedDataTable& viewcapture_interned_data_table()
+      const {
+    return viewcapture_interned_data_table_;
+  }
+  tables::ViewCaptureInternedDataTable*
+  mutable_viewcapture_interned_data_table() {
+    return &viewcapture_interned_data_table_;
   }
 
   const tables::WindowManagerTable& windowmanager_table() const {
@@ -845,10 +872,56 @@ class TraceStorage {
     return &window_manager_shell_transition_handlers_table_;
   }
 
+  const tables::WindowManagerShellTransitionParticipantsTable&
+  window_manager_shell_transition_participants_table() const {
+    return window_manager_shell_transition_participants_table_;
+  }
+  tables::WindowManagerShellTransitionParticipantsTable*
+  mutable_window_manager_shell_transition_participants_table() {
+    return &window_manager_shell_transition_participants_table_;
+  }
+
+  const tables::WindowManagerShellTransitionProtosTable&
+  window_manager_shell_transition_protos_table() const {
+    return window_manager_shell_transition_protos_table_;
+  }
+  tables::WindowManagerShellTransitionProtosTable*
+  mutable_window_manager_shell_transition_protos_table() {
+    return &window_manager_shell_transition_protos_table_;
+  }
+
   const tables::ProtoLogTable& protolog_table() const {
     return protolog_table_;
   }
   tables::ProtoLogTable* mutable_protolog_table() { return &protolog_table_; }
+
+  const tables::WinscopeTraceRectTable& winscope_trace_rect_table() const {
+    return winscope_trace_rect_table_;
+  }
+  tables::WinscopeTraceRectTable* mutable_winscope_trace_rect_table() {
+    return &winscope_trace_rect_table_;
+  }
+
+  const tables::WinscopeRectTable& winscope_rect_table() const {
+    return winscope_rect_table_;
+  }
+  tables::WinscopeRectTable* mutable_winscope_rect_table() {
+    return &winscope_rect_table_;
+  }
+
+  const tables::WinscopeFillRegionTable& winscope_fill_region_table() const {
+    return winscope_fill_region_table_;
+  }
+  tables::WinscopeFillRegionTable* mutable_winscope_fill_region_table() {
+    return &winscope_fill_region_table_;
+  }
+
+  const tables::WinscopeTransformTable& winscope_transform_table() const {
+    return winscope_transform_table_;
+  }
+  tables::WinscopeTransformTable* mutable_winscope_transform_table() {
+    return &winscope_transform_table_;
+  }
 
   const tables::ExperimentalProtoPathTable& experimental_proto_path_table()
       const {
@@ -885,16 +958,15 @@ class TraceStorage {
   base::Status ExtractArg(uint32_t arg_set_id,
                           const char* key,
                           std::optional<Variadic>* result) const {
-    const auto& args = arg_table();
-    Query q;
-    q.constraints = {args.arg_set_id().eq(arg_set_id), args.key().eq(key)};
-    auto it = args.FilterToIterator(q);
-    if (!it) {
+    args_cursor_.SetFilterValueUnchecked(0, arg_set_id);
+    args_cursor_.SetFilterValueUnchecked(1, key);
+    args_cursor_.Execute();
+    if (args_cursor_.Eof()) {
       *result = std::nullopt;
       return base::OkStatus();
     }
-    *result = GetArgValue(it.row_number().row_number());
-    if (++it) {
+    *result = GetArgValue(args_cursor_.ToRowNumber().row_number());
+    if (args_cursor_.Next(); !args_cursor_.Eof()) {
       return base::ErrStatus(
           "EXTRACT_ARG: received multiple args matching arg set id and key");
     }
@@ -1071,7 +1143,7 @@ class TraceStorage {
 
   // AndroidNetworkPackets tables
   tables::AndroidNetworkPacketsTable android_network_packets_table_{
-      &string_pool_, &slice_table_};
+      &string_pool_};
 
   // V8 tables
   tables::V8IsolateTable v8_isolate_table_{&string_pool_};
@@ -1110,16 +1182,33 @@ class TraceStorage {
   tables::InputMethodServiceTable inputmethod_service_table_{&string_pool_};
   tables::SurfaceFlingerLayersSnapshotTable
       surfaceflinger_layers_snapshot_table_{&string_pool_};
+  tables::SurfaceFlingerDisplayTable surfaceflinger_display_table_{
+      &string_pool_};
   tables::SurfaceFlingerLayerTable surfaceflinger_layer_table_{&string_pool_};
   tables::SurfaceFlingerTransactionsTable surfaceflinger_transactions_table_{
       &string_pool_};
+  tables::SurfaceFlingerTransactionTable surfaceflinger_transaction_table_{
+      &string_pool_};
+  tables::SurfaceFlingerTransactionFlagTable
+      surfaceflinger_transaction_flag_table_{&string_pool_};
   tables::ViewCaptureTable viewcapture_table_{&string_pool_};
+  tables::ViewCaptureViewTable viewcapture_view_table_{&string_pool_};
+  tables::ViewCaptureInternedDataTable viewcapture_interned_data_table_{
+      &string_pool_};
   tables::WindowManagerTable windowmanager_table_{&string_pool_};
   tables::WindowManagerShellTransitionsTable
       window_manager_shell_transitions_table_{&string_pool_};
   tables::WindowManagerShellTransitionHandlersTable
       window_manager_shell_transition_handlers_table_{&string_pool_};
+  tables::WindowManagerShellTransitionParticipantsTable
+      window_manager_shell_transition_participants_table_{&string_pool_};
+  tables::WindowManagerShellTransitionProtosTable
+      window_manager_shell_transition_protos_table_{&string_pool_};
   tables::ProtoLogTable protolog_table_{&string_pool_};
+  tables::WinscopeTraceRectTable winscope_trace_rect_table_{&string_pool_};
+  tables::WinscopeRectTable winscope_rect_table_{&string_pool_};
+  tables::WinscopeFillRegionTable winscope_fill_region_table_{&string_pool_};
+  tables::WinscopeTransformTable winscope_transform_table_{&string_pool_};
 
   tables::ExperimentalProtoPathTable experimental_proto_path_table_{
       &string_pool_};
@@ -1128,6 +1217,21 @@ class TraceStorage {
 
   tables::ExpMissingChromeProcTable
       experimental_missing_chrome_processes_table_{&string_pool_};
+
+  mutable tables::ArgTable::Cursor args_cursor_{arg_table_.CreateCursor({
+      dataframe::FilterSpec{
+          tables::ArgTable::ColumnIndex::arg_set_id,
+          0,
+          dataframe::Eq{},
+          std::nullopt,
+      },
+      dataframe::FilterSpec{
+          tables::ArgTable::ColumnIndex::key,
+          1,
+          dataframe::Eq{},
+          std::nullopt,
+      },
+  })};
 
   // The below array allow us to map between enums and their string
   // representations.
@@ -1146,6 +1250,9 @@ struct std::hash<::perfetto::trace_processor::BaseId> {
   }
 };
 
+template <>
+struct std::hash<::perfetto::trace_processor::SliceId>
+    : std::hash<::perfetto::trace_processor::BaseId> {};
 template <>
 struct std::hash<::perfetto::trace_processor::TrackId>
     : std::hash<::perfetto::trace_processor::BaseId> {};
@@ -1176,7 +1283,8 @@ struct std::hash<
   using result_type = size_t;
 
   result_type operator()(const argument_type& r) const {
-    return std::hash<::perfetto::trace_processor::StringId>{}(r.name) ^
+    return std::hash<std::optional<::perfetto::trace_processor::StringId>>{}(
+               r.name) ^
            std::hash<std::optional<::perfetto::trace_processor::MappingId>>{}(
                r.mapping) ^
            std::hash<int64_t>{}(r.rel_pc);
@@ -1206,12 +1314,14 @@ struct std::hash<
   using result_type = size_t;
 
   result_type operator()(const argument_type& r) const {
-    return std::hash<::perfetto::trace_processor::StringId>{}(r.build_id) ^
+    return std::hash<std::optional<::perfetto::trace_processor::StringId>>{}(
+               r.build_id) ^
            std::hash<int64_t>{}(r.exact_offset) ^
            std::hash<int64_t>{}(r.start_offset) ^
            std::hash<int64_t>{}(r.start) ^ std::hash<int64_t>{}(r.end) ^
            std::hash<int64_t>{}(r.load_bias) ^
-           std::hash<::perfetto::trace_processor::StringId>{}(r.name);
+           std::hash<std::optional<::perfetto::trace_processor::StringId>>{}(
+               r.name);
   }
 };
 

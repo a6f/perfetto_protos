@@ -144,7 +144,7 @@ class ProcessWorkspaceFactory {
     const tracks = this.getTracksContaining(titleSubstring);
     if (tracks.length == 0) return;
     if (tracks.length >= minSizeToGroup) {
-      const newGroup = new TrackNode({title: titleSubstring, isSummary: true});
+      const newGroup = new TrackNode({name: titleSubstring, isSummary: true});
       this.ws.addChildLast(newGroup);
       tracks.forEach((track) => newGroup.addChildLast(track.clone()));
     } else {
@@ -154,7 +154,7 @@ class ProcessWorkspaceFactory {
 
   private getTracksContaining(titleSubstring: string): TrackNode[] {
     return this.processTracks.filter((track) =>
-      track.title.includes(titleSubstring),
+      track.name.includes(titleSubstring),
     );
   }
 
@@ -181,8 +181,8 @@ class ProcessWorkspaceFactory {
 
   private async pinUiThreads() {
     const result = await this.trace.engine.query(`
-      INCLUDE PERFETTO MODULE slices.slices;
-      SELECT DISTINCT utid FROM _slice_with_thread_and_process_info
+      INCLUDE PERFETTO MODULE slices.with_context;
+      SELECT DISTINCT utid FROM thread_or_process_slice
       WHERE upid = ${this.process.upid}
        AND upid != utid -- main thread excluded
        AND name GLOB "Choreographer#doFrame*"
@@ -201,9 +201,9 @@ class ProcessWorkspaceFactory {
       return utid != undefined && uiThreadUtidsSet.has(utid);
     });
     toPin.sort((a, b) => {
-      return a.title.localeCompare(b.title);
+      return a.name.localeCompare(b.name);
     });
-    const uiThreadTrack = new TrackNode({title: 'UI Threads', isSummary: true});
+    const uiThreadTrack = new TrackNode({name: 'UI Threads', isSummary: true});
     this.ws.addChildLast(uiThreadTrack);
     toPin.forEach((track) => uiThreadTrack.addChildLast(track.clone()));
   }
@@ -217,16 +217,16 @@ class ProcessWorkspaceFactory {
     const trackGroups = new Map<string, TrackNode>();
 
     this.processTracks.forEach((track) => {
-      const match = track.title.match(groupRegex);
+      const match = track.name.match(groupRegex);
       if (!match?.groups) return;
 
       const {groupName, trackName} = match.groups;
 
       const newTrack = track.clone();
-      newTrack.title = trackName;
+      newTrack.name = trackName;
 
       if (!trackGroups.has(groupName)) {
-        const newGroup = new TrackNode({title: groupName, isSummary: true});
+        const newGroup = new TrackNode({name: groupName, isSummary: true});
         this.ws.addChildLast(newGroup);
         trackGroups.set(groupName, newGroup);
       }

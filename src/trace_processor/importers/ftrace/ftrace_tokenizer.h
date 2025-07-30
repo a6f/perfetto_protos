@@ -58,10 +58,9 @@ class FtraceTokenizer {
       ClockTracker::ClockId,
       const protos::pbzero::FtraceEventBundle::CompactSched::Decoder& compact,
       const std::vector<StringId>& string_table);
-
-  void HandleFtraceClockSnapshot(int64_t ftrace_ts,
-                                 int64_t boot_ts,
-                                 uint32_t packet_sequence_id);
+  base::StatusOr<ClockTracker::ClockId> HandleFtraceClockSnapshot(
+      protos::pbzero::FtraceEventBundle::Decoder& decoder,
+      uint32_t packet_sequence_id);
   void TokenizeFtraceGpuWorkPeriod(uint32_t cpu,
                                    TraceBlobView event,
                                    RefPtr<PacketSequenceStateGeneration> state);
@@ -70,10 +69,12 @@ class FtraceTokenizer {
       TraceBlobView event,
       RefPtr<PacketSequenceStateGeneration> state);
   void TokenizeFtraceParamSetValueCpm(
-      uint32_t cpu, TraceBlobView event,
+      uint32_t cpu,
+      TraceBlobView event,
       RefPtr<PacketSequenceStateGeneration> state);
   std::optional<protozero::Field> GetFtraceEventField(
-      uint32_t event_id, const TraceBlobView& event);
+      uint32_t event_id,
+      const TraceBlobView& event);
 
   void DlogWithLimit(const base::Status& status) {
     static std::atomic<uint32_t> dlog_count(0);

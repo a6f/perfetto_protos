@@ -20,10 +20,9 @@ import {
   VerticalBounds,
 } from '../../base/geom';
 import {TimeScale} from '../../base/time_scale';
-import {Flow} from '../../core/flow_types';
+import {ALL_CATEGORIES, Flow, getFlowCategories} from '../../core/flow_types';
 import {TraceImpl} from '../../core/trace_impl';
 import {TrackNode} from '../../public/workspace';
-import {ALL_CATEGORIES, getFlowCategories} from '../flow_events_panel';
 
 const TRACK_GROUP_CONNECTION_OFFSET = 5;
 const TRIANGLE_SIZE = 5;
@@ -148,7 +147,7 @@ export function renderFlows(
       const trackRect = trackPanel.verticalBounds;
       const sliceRectRaw = trace.tracks
         .getTrack(trackUri)
-        ?.track.getSliceVerticalBounds?.(depth);
+        ?.renderer.getSliceVerticalBounds?.(depth);
       if (sliceRectRaw) {
         const sliceRect = {
           top: sliceRectRaw.top + trackRect.top,

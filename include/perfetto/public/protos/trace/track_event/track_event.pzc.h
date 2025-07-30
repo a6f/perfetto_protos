@@ -41,7 +41,6 @@ PERFETTO_PB_MSG_DECL(perfetto_protos_ChromeUserEvent);
 PERFETTO_PB_MSG_DECL(perfetto_protos_ChromeWindowHandleEventInfo);
 PERFETTO_PB_MSG_DECL(perfetto_protos_DebugAnnotation);
 PERFETTO_PB_MSG_DECL(perfetto_protos_LogMessage);
-PERFETTO_PB_MSG_DECL(perfetto_protos_PixelModemEventInsight);
 PERFETTO_PB_MSG_DECL(perfetto_protos_Screenshot);
 PERFETTO_PB_MSG_DECL(perfetto_protos_SourceLocation);
 PERFETTO_PB_MSG_DECL(perfetto_protos_TaskExecution);
@@ -172,6 +171,21 @@ PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
                   terminating_flow_ids,
                   48);
 PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
+                  VARINT,
+                  uint64_t,
+                  correlation_id,
+                  52);
+PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
+                  STRING,
+                  const char*,
+                  correlation_id_str,
+                  53);
+PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
+                  VARINT,
+                  uint64_t,
+                  correlation_id_str_iid,
+                  54);
+PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
                   MSG,
                   perfetto_protos_DebugAnnotation,
                   debug_annotations,
@@ -251,11 +265,6 @@ PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
                   perfetto_protos_Screenshot,
                   screenshot,
                   50);
-PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
-                  MSG,
-                  perfetto_protos_PixelModemEventInsight,
-                  pixel_modem_event_insight,
-                  51);
 PERFETTO_PB_FIELD(perfetto_protos_TrackEvent,
                   MSG,
                   perfetto_protos_SourceLocation,

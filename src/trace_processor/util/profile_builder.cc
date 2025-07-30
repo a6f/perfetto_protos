@@ -15,27 +15,39 @@
  */
 
 #include "src/trace_processor/util/profile_builder.h"
+
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
-#include <deque>
-#include <iostream>
+#include <functional>
 #include <iterator>
+#include <memory>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/string_utils.h"
 #include "perfetto/ext/base/string_view.h"
+#include "perfetto/ext/base/utils.h"
 #include "perfetto/ext/trace_processor/demangle.h"
-#include "protos/third_party/pprof/profile.pbzero.h"
+#include "perfetto/protozero/packed_repeated_fields.h"
+#include "perfetto/protozero/proto_utils.h"
+#include "perfetto/protozero/scattered_heap_buffer.h"
 #include "src/trace_processor/containers/null_term_string_view.h"
 #include "src/trace_processor/containers/string_pool.h"
+#include "src/trace_processor/dataframe/specs.h"
 #include "src/trace_processor/storage/trace_storage.h"
+#include "src/trace_processor/tables/jit_tables_py.h"
+#include "src/trace_processor/tables/profiler_tables_py.h"
+#include "src/trace_processor/tables/v8_tables_py.h"
 #include "src/trace_processor/types/trace_processor_context.h"
 #include "src/trace_processor/util/annotated_callsites.h"
 
-namespace perfetto {
-namespace trace_processor {
+#include "protos/third_party/pprof/profile.pbzero.h"
+
+namespace perfetto::trace_processor {
 namespace {
 
 using protos::pbzero::Stack;
@@ -236,7 +248,65 @@ GProfileBuilder::GProfileBuilder(const TraceProcessorContext* context,
                                  const std::vector<ValueType>& sample_types)
     : context_(*context),
       string_table_(&result_, &context->storage->string_pool()),
-      annotations_(context) {
+      annotations_(context),
+      jit_frame_cursor_(context->storage->jit_frame_table().CreateCursor({
+          dataframe::FilterSpec{
+              tables::JitFrameTable::ColumnIndex::frame_id,
+              0,
+              dataframe::Eq{},
+              {},
+          },
+      })),
+      v8_js_code_cursor_(context->storage->v8_js_code_table().CreateCursor({
+          dataframe::FilterSpec{
+              tables::V8JsCodeTable::ColumnIndex::jit_code_id,
+              0,
+              dataframe::Eq{},
+              {},
+          },
+      })),
+      v8_wasm_code_cursor_(context->storage->v8_wasm_code_table().CreateCursor({
+          dataframe::FilterSpec{
+              tables::V8WasmCodeTable::ColumnIndex::jit_code_id,
+              0,
+              dataframe::Eq{},
+              {},
+          },
+      })),
+      v8_regexp_code_cursor_(
+          context->storage->v8_regexp_code_table().CreateCursor({
+              dataframe::FilterSpec{
+                  tables::V8RegexpCodeTable::ColumnIndex::jit_code_id,
+                  0,
+                  dataframe::Eq{},
+                  {},
+              },
+          })),
+      v8_internal_code_cursor_(
+          context->storage->v8_internal_code_table().CreateCursor({
+              dataframe::FilterSpec{
+                  tables::V8InternalCodeTable::ColumnIndex::jit_code_id,
+                  0,
+                  dataframe::Eq{},
+                  {},
+              },
+          })),
+      jit_code_cursor_(context->storage->jit_code_table().CreateCursor({
+          dataframe::FilterSpec{
+              tables::JitCodeTable::ColumnIndex::function_name,
+              0,
+              dataframe::Eq{},
+              {},
+          },
+      })),
+      symbol_cursor_(context->storage->symbol_table().CreateCursor({
+          dataframe::FilterSpec{
+              tables::SymbolTable::ColumnIndex::symbol_set_id,
+              0,
+              dataframe::Eq{},
+              {},
+          },
+      })) {
   // Make sure the empty function always gets id 0 which will be ignored
   // when writing the proto file.
   functions_.insert(
@@ -302,7 +372,7 @@ bool GProfileBuilder::AddSample(const Stack::Decoder& stack,
                                  : entry.annotated_callsite_id();
       const protozero::PackedVarInt& ids =
           GetLocationIdsForCallsite(CallsiteId(callsite_id), annotated);
-      for (auto* p = ids.data(); p < ids.data() + ids.size();) {
+      for (const uint8_t* p = ids.data(); p < ids.data() + ids.size();) {
         uint64_t location_id;
         p = protozero::proto_utils::ParseVarInt(p, ids.data() + ids.size(),
                                                 &location_id);
@@ -376,7 +446,7 @@ uint64_t GProfileBuilder::WriteLocationIfNeeded(FrameId frame_id,
     return it->second;
   }
 
-  auto& frames = context_.storage->stack_profile_frame_table();
+  const auto& frames = context_.storage->stack_profile_frame_table();
   auto frame = *frames.FindById(key.frame_id);
 
   const auto& mappings = context_.storage->stack_profile_mapping_table();
@@ -405,13 +475,10 @@ uint64_t GProfileBuilder::WriteFakeLocationIfNeeded(const std::string& name) {
 
   uint64_t& id =
       locations_[Location{0, 0, {{WriteFakeFunctionIfNeeded(name_id), 0}}}];
-
   if (id == 0) {
     id = locations_.size();
   }
-
   seen_fake_locations_.insert({name_id, id});
-
   return id;
 }
 
@@ -438,8 +505,14 @@ std::vector<GProfileBuilder::Line> GProfileBuilder::GetLines(
     const tables::StackProfileFrameTable::ConstRowReference& frame,
     CallsiteAnnotation annotation,
     uint64_t mapping_id) {
-  std::vector<Line> lines =
-      GetLinesForSymbolSetId(frame.symbol_set_id(), annotation, mapping_id);
+  std::vector<Line> lines;
+
+  lines = GetLinesForJitFrame(frame, annotation, mapping_id);
+  if (!lines.empty()) {
+    return lines;
+  }
+
+  lines = GetLinesForSymbolSetId(frame.symbol_set_id(), annotation, mapping_id);
   if (!lines.empty()) {
     return lines;
   }
@@ -453,6 +526,122 @@ std::vector<GProfileBuilder::Line> GProfileBuilder::GetLines(
   return lines;
 }
 
+std::vector<GProfileBuilder::Line> GProfileBuilder::GetLinesForJitFrame(
+    const tables::StackProfileFrameTable::ConstRowReference& frame,
+    CallsiteAnnotation annotation,
+    uint64_t mapping_id) {
+  // Execute the equivalent of the SQL logic in callstacks/stack_profile.sql,
+  // namely
+  //
+  // ```
+  // COALESCE(
+  //     'JS: ' || IIF(jsf.name = "", "(anonymous)", jsf.name) || ':' ||
+  //     jsf.line || ':' || jsf.col || ' [' || LOWER(jsc.tier) || ']', 'WASM: '
+  //     || wc.function_name || ' [' || LOWER(wc.tier) || ']', 'REGEXP: ' ||
+  //     rc.pattern, 'V8: ' || v8c.function_name, 'JIT: ' || jc.function_name
+  //   ) AS name,
+  // FROM _callstack_spc_raw_forest c
+  // JOIN stack_profile_frame f ON c.frame_id = f.id
+  // LEFT JOIN _v8_js_code jsc USING(jit_code_id)
+  // LEFT JOIN v8_js_function jsf USING(v8_js_function_id)
+  // LEFT JOIN _v8_internal_code v8c USING(jit_code_id)
+  // LEFT JOIN _v8_wasm_code wc USING(jit_code_id)
+  // LEFT JOIN _v8_regexp_code rc USING(jit_code_id)
+  // LEFT JOIN __intrinsic_jit_code jc ON c.jit_code_id = jc.id
+  // ```
+  //
+  // TODO(leszeks): Unify these manual table lookups with the SQL
+  // implementation, e.g. by calling _callstacks_for_callsites in
+  // GProfileBuilder.
+
+  jit_frame_cursor_.SetFilterValueUnchecked(0, frame.id().value);
+  jit_frame_cursor_.Execute();
+  if (jit_frame_cursor_.Eof()) {
+    return {};
+  }
+
+  v8_js_code_cursor_.SetFilterValueUnchecked(
+      0, jit_frame_cursor_.jit_code_id().value);
+  v8_js_code_cursor_.Execute();
+  if (!v8_js_code_cursor_.Eof()) {
+    const auto& v8_js_funcs = context_.storage->v8_js_function_table();
+    auto maybe_jsf =
+        v8_js_funcs.FindById(v8_js_code_cursor_.v8_js_function_id());
+    if (maybe_jsf) {
+      auto jsf = *maybe_jsf;
+      auto jsf_name = context_.storage->string_pool().Get(jsf.name());
+      auto jsf_tier =
+          context_.storage->string_pool().Get(v8_js_code_cursor_.tier());
+      base::StackString<64> name(
+          "JS: %s:%u:%u [%s]",
+          jsf_name.empty() ? "(anonymous)" : jsf_name.c_str(),
+          jsf.line().value_or(0), jsf.col().value_or(0), jsf_tier.c_str());
+
+      const auto& v8_js_scripts = context_.storage->v8_js_script_table();
+      auto maybe_jss = v8_js_scripts.FindById(jsf.v8_js_script_id());
+
+      return {
+          Line{WriteFunctionIfNeeded(
+                   name.string_view(),
+                   maybe_jss.has_value() ? maybe_jss->name() : kNullStringId,
+                   annotation, mapping_id),
+               jsf.line().value_or(0)}};
+    }
+  }
+
+  v8_wasm_code_cursor_.SetFilterValueUnchecked(
+      0, jit_frame_cursor_.jit_code_id().value);
+  v8_wasm_code_cursor_.Execute();
+  if (!v8_wasm_code_cursor_.Eof()) {
+    std::string name =
+        "WASM: " +
+        context_.storage->GetString(v8_wasm_code_cursor_.function_name())
+            .ToStdString();
+    return {Line{WriteFunctionIfNeeded(base::StringView(name), kNullStringId,
+                                       annotation, mapping_id),
+                 0}};
+  }
+
+  v8_regexp_code_cursor_.SetFilterValueUnchecked(
+      0, jit_frame_cursor_.jit_code_id().value);
+  v8_regexp_code_cursor_.Execute();
+  if (!v8_regexp_code_cursor_.Eof()) {
+    std::string name =
+        "REGEXP: " +
+        context_.storage->GetString(v8_regexp_code_cursor_.pattern())
+            .ToStdString();
+    return {Line{WriteFunctionIfNeeded(base::StringView(name), kNullStringId,
+                                       annotation, mapping_id),
+                 0}};
+  }
+
+  v8_internal_code_cursor_.SetFilterValueUnchecked(
+      0, jit_frame_cursor_.jit_code_id().value);
+  v8_internal_code_cursor_.Execute();
+  if (!v8_internal_code_cursor_.Eof()) {
+    std::string name =
+        "V8: " +
+        context_.storage->GetString(v8_internal_code_cursor_.function_name())
+            .ToStdString();
+    return {Line{WriteFunctionIfNeeded(base::StringView(name), kNullStringId,
+                                       annotation, mapping_id),
+                 0}};
+  }
+
+  jit_code_cursor_.SetFilterValueUnchecked(
+      0, jit_frame_cursor_.jit_code_id().value);
+  jit_code_cursor_.Execute();
+  if (!jit_code_cursor_.Eof()) {
+    std::string name =
+        "JIT: " + context_.storage->GetString(jit_code_cursor_.function_name())
+                      .ToStdString();
+    return {Line{WriteFunctionIfNeeded(base::StringView(name), kNullStringId,
+                                       annotation, mapping_id),
+                 0}};
+  }
+  return {};
+}
+
 std::vector<GProfileBuilder::Line> GProfileBuilder::GetLinesForSymbolSetId(
     std::optional<uint32_t> symbol_set_id,
     CallsiteAnnotation annotation,
@@ -461,26 +650,18 @@ std::vector<GProfileBuilder::Line> GProfileBuilder::GetLinesForSymbolSetId(
     return {};
   }
 
-  auto& symbols = context_.storage->symbol_table();
-
   using RowRef =
       perfetto::trace_processor::tables::SymbolTable::ConstRowReference;
   std::vector<RowRef> symbol_set;
-  Query q;
-  q.constraints = {symbols.symbol_set_id().eq(*symbol_set_id)};
-  for (auto it = symbols.FilterToIterator(q); it; ++it) {
-    symbol_set.push_back(it.row_reference());
-  }
-
-  std::sort(symbol_set.begin(), symbol_set.end(),
-            [](const RowRef& a, const RowRef& b) { return a.id() < b.id(); });
+  symbol_cursor_.SetFilterValueUnchecked(0, *symbol_set_id);
+  symbol_cursor_.Execute();
 
   std::vector<GProfileBuilder::Line> lines;
-  for (const RowRef& symbol : symbol_set) {
+  for (; !symbol_cursor_.Eof(); symbol_cursor_.Next()) {
     if (uint64_t function_id =
-            WriteFunctionIfNeeded(symbol, annotation, mapping_id);
+            WriteFunctionIfNeeded(symbol_cursor_, annotation, mapping_id);
         function_id != kNullFunctionId) {
-      lines.push_back({function_id, symbol.line_number().value_or(0)});
+      lines.push_back({function_id, symbol_cursor_.line_number().value_or(0)});
     }
   }
 
@@ -497,8 +678,34 @@ uint64_t GProfileBuilder::WriteFakeFunctionIfNeeded(int64_t name_id) {
   return ins.first->second;
 }
 
+uint64_t GProfileBuilder::WriteFunctionIfNeeded(base::StringView name,
+                                                StringPool::Id filename,
+                                                CallsiteAnnotation annotation,
+                                                uint64_t mapping_id) {
+  int64_t name_id = string_table_.GetAnnotatedString(name, annotation);
+  int64_t filename_id = !filename.is_null()
+                            ? string_table_.InternString(filename)
+                            : kEmptyStringIndex;
+
+  auto ins =
+      functions_.insert({Function{name_id, kEmptyStringIndex, filename_id},
+                         functions_.size() + 1});
+  uint64_t id = ins.first->second;
+
+  if (ins.second) {
+    if (name_id != kEmptyStringIndex) {
+      GetMapping(mapping_id).debug_info.has_functions = true;
+    }
+    if (filename_id != kEmptyStringIndex) {
+      GetMapping(mapping_id).debug_info.has_filenames = true;
+    }
+  }
+
+  return id;
+}
+
 uint64_t GProfileBuilder::WriteFunctionIfNeeded(
-    const tables::SymbolTable::ConstRowReference& symbol,
+    const tables::SymbolTable::ConstCursor& symbol,
     CallsiteAnnotation annotation,
     uint64_t mapping_id) {
   int64_t name = string_table_.GetAnnotatedString(symbol.name(), annotation);
@@ -604,8 +811,8 @@ uint64_t GProfileBuilder::WriteMappingIfNeeded(
       {MappingKey(mapping_ref, string_table_), mapping_keys_.size() + 1});
 
   if (ins.second) {
-    mappings_.push_back(
-        Mapping(mapping_ref, context_.storage->string_pool(), string_table_));
+    mappings_.emplace_back(mapping_ref, context_.storage->string_pool(),
+                           string_table_);
   }
 
   return ins.first->second;
@@ -613,7 +820,7 @@ uint64_t GProfileBuilder::WriteMappingIfNeeded(
 
 void GProfileBuilder::WriteMapping(uint64_t mapping_id) {
   const Mapping& mapping = GetMapping(mapping_id);
-  auto m = result_->add_mapping();
+  auto* m = result_->add_mapping();
   m->set_id(mapping_id);
   m->set_memory_start(mapping.memory_start);
   m->set_memory_limit(mapping.memory_limit);
@@ -645,6 +852,7 @@ void GProfileBuilder::WriteMappings() {
 
 std::optional<uint64_t> GProfileBuilder::GuessMainBinary() const {
   std::vector<int64_t> mapping_scores;
+  mapping_scores.reserve(mappings_.size());
 
   for (const auto& mapping : mappings_) {
     mapping_scores.push_back(mapping.ComputeMainBinaryScore());
@@ -659,5 +867,4 @@ std::optional<uint64_t> GProfileBuilder::GuessMainBinary() const {
   return static_cast<uint64_t>(std::distance(mapping_scores.begin(), it) + 1);
 }
 
-}  // namespace trace_processor
-}  // namespace perfetto
+}  // namespace perfetto::trace_processor

@@ -14,68 +14,72 @@
 
 import m from 'mithril';
 import {findRef} from '../../base/dom_utils';
+import {assertUnreachable} from '../../base/logging';
+import {Trace} from '../../public/trace';
 import {Form, FormLabel} from '../../widgets/form';
 import {Select} from '../../widgets/select';
 import {TextInput} from '../../widgets/text_input';
-import {
-  addDebugCounterTrack,
-  addDebugSliceTrack,
-  addPivotedTracks,
-} from './debug_tracks';
-import {Trace} from '../../public/trace';
-import {SliceColumnMapping, SqlDataSource} from './query_slice_track';
-import {CounterColumnMapping} from './query_counter_track';
+import {addDebugCounterTrack, addDebugSliceTrack} from './debug_tracks';
 
 interface AddDebugTrackMenuAttrs {
-  dataSource: Required<SqlDataSource>;
-  trace: Trace;
+  readonly trace: Trace; // Required for adding new tracks and modifying the workspace.
+  // A list of available columns in the query results - used to work out sensible defaults for each field.
+  readonly availableColumns: ReadonlyArray<string>;
+  // The actual query used to define the debug track.
+  readonly query: string;
 }
 
 const TRACK_NAME_FIELD_REF = 'TRACK_NAME_FIELD';
 
+function chooseDefaultColumn(
+  columns: ReadonlyArray<string>,
+  name: string,
+): string {
+  // Search for exact match
+  const exactMatch = columns.find((col) => col === name);
+  if (exactMatch) return exactMatch;
+
+  // Search for partial match
+  const partialMatch = columns.find((col) => col.endsWith(`_${name}`));
+  if (partialMatch) return partialMatch;
+
+  // Debug tracks support data without dur, in which case it's treated as 0.
+  if (name === 'dur') {
+    return '0';
+  }
+
+  return '';
+}
+
+type TrackType = 'slice' | 'counter';
+const trackTypes: ReadonlyArray<TrackType> = ['slice', 'counter'];
+
+interface ConfigurationOptions {
+  ts: string;
+  dur: string;
+  name: string;
+  value: string;
+  argSetId: string;
+  pivot: string;
+}
+
 export class AddDebugTrackMenu
   implements m.ClassComponent<AddDebugTrackMenuAttrs>
 {
-  readonly columns: string[];
+  private trackName = '';
+  private trackType: TrackType = 'slice';
+  private readonly options: ConfigurationOptions;
 
-  name: string = '';
-  trackType: 'slice' | 'counter' = 'slice';
-  // Names of columns which will be used as data sources for rendering.
-  // We store the config for all possible columns used for rendering (i.e.
-  // 'value' for slice and 'name' for counter) and then just don't the values
-  // which don't match the currently selected track type (so changing track type
-  // from A to B and back to A is a no-op).
-  renderParams: {
-    ts: string;
-    dur: string;
-    name: string;
-    value: string;
-    pivot: string;
-  };
+  constructor({attrs}: m.Vnode<AddDebugTrackMenuAttrs>) {
+    const columns = attrs.availableColumns;
 
-  constructor(vnode: m.Vnode<AddDebugTrackMenuAttrs>) {
-    this.columns = [...vnode.attrs.dataSource.columns];
-
-    const chooseDefaultOption = (name: string) => {
-      for (const column of this.columns) {
-        if (column === name) return column;
-      }
-      for (const column of this.columns) {
-        if (column.endsWith(`_${name}`)) return column;
-      }
-      // Debug tracks support data without dur, in which case it's treated as
-      // 0.
-      if (name === 'dur') {
-        return '0';
-      }
-      return this.columns[0];
-    };
-
-    this.renderParams = {
-      ts: chooseDefaultOption('ts'),
-      dur: chooseDefaultOption('dur'),
-      name: chooseDefaultOption('name'),
-      value: chooseDefaultOption('value'),
+    // Initialize the settings to some sensible defaults.
+    this.options = {
+      ts: chooseDefaultColumn(columns, 'ts'),
+      dur: chooseDefaultColumn(columns, 'dur'),
+      name: chooseDefaultColumn(columns, 'name'),
+      value: chooseDefaultColumn(columns, 'value'),
+      argSetId: chooseDefaultColumn(columns, 'arg_set_id'),
       pivot: '',
     };
   }
@@ -93,171 +97,152 @@ export class AddDebugTrackMenu
     }
   }
 
-  private renderTrackTypeSelect() {
-    const options = [];
-    for (const type of ['slice', 'counter']) {
-      options.push(
-        m(
-          'option',
-          {
-            value: type,
-            selected: this.trackType === type ? true : undefined,
+  view({attrs}: m.Vnode<AddDebugTrackMenuAttrs>) {
+    return m(
+      Form,
+      {
+        onSubmit: () => this.createTracks(attrs),
+        submitLabel: 'Add Track',
+      },
+      m(FormLabel, {for: 'track_name'}, 'Track name'),
+      m(
+        TextInput,
+        {
+          id: 'track_name',
+          ref: TRACK_NAME_FIELD_REF,
+          onkeydown: (e: KeyboardEvent) => {
+            // Allow Esc to close popup.
+            if (e.key === 'Escape') return;
           },
-          type,
-        ),
-      );
-    }
+          oninput: (e: KeyboardEvent) => {
+            if (!e.target) return;
+            this.trackName = (e.target as HTMLInputElement).value;
+          },
+        },
+        this.trackName,
+      ),
+      m(FormLabel, {for: 'track_type'}, 'Track type'),
+      this.renderTrackTypeSelect(),
+      this.renderOptions(attrs.availableColumns),
+    );
+  }
+
+  private renderTrackTypeSelect() {
     return m(
       Select,
       {
         id: 'track_type',
         oninput: (e: Event) => {
           if (!e.target) return;
-          this.trackType = (e.target as HTMLSelectElement).value as
-            | 'slice'
-            | 'counter';
+          this.trackType = (e.target as HTMLSelectElement).value as TrackType;
         },
       },
-      options,
+      trackTypes.map((value) =>
+        m(
+          'option',
+          {
+            value: value,
+            selected: this.trackType === value,
+          },
+          value,
+        ),
+      ),
     );
   }
 
-  view(vnode: m.Vnode<AddDebugTrackMenuAttrs>) {
-    const renderSelect = (name: 'ts' | 'dur' | 'name' | 'value' | 'pivot') => {
-      const options = [];
+  private renderOptions(availableColumns: ReadonlyArray<string>) {
+    switch (this.trackType) {
+      case 'slice':
+        return this.renderSliceOptions(availableColumns);
+      case 'counter':
+        return this.renderCounterTrackOptions(availableColumns);
+      default:
+        assertUnreachable(this.trackType);
+    }
+  }
 
-      if (name === 'pivot') {
-        options.push(
-          m(
-            'option',
-            {selected: this.renderParams[name] === '' ? true : undefined},
-            m('i', ''),
-          ),
-        );
-      }
-      for (const column of this.columns) {
-        options.push(
-          m(
-            'option',
-            {selected: this.renderParams[name] === column ? true : undefined},
-            column,
-          ),
-        );
-      }
-      if (name === 'dur') {
-        options.push(
-          m(
-            'option',
-            {selected: this.renderParams[name] === '0' ? true : undefined},
-            m('i', '0'),
-          ),
-        );
-      }
-      return [
-        m(FormLabel, {for: name}, name),
-        m(
-          Select,
-          {
-            id: name,
-            oninput: (e: Event) => {
-              if (!e.target) return;
-              this.renderParams[name] = (e.target as HTMLSelectElement).value;
-            },
+  private renderSliceOptions(availableColumns: ReadonlyArray<string>) {
+    return [
+      this.renderFormSelectInput('ts', 'ts', availableColumns),
+      this.renderFormSelectInput('dur', 'dur', ['0', ...availableColumns]),
+      this.renderFormSelectInput('name', 'name', availableColumns),
+      this.renderFormSelectInput('arg_set_id', 'argSetId', [
+        '',
+        ...availableColumns,
+      ]),
+      this.renderFormSelectInput('pivot', 'pivot', ['', ...availableColumns]),
+    ];
+  }
+
+  private renderCounterTrackOptions(availableColumns: ReadonlyArray<string>) {
+    return [
+      this.renderFormSelectInput('ts', 'ts', availableColumns),
+      this.renderFormSelectInput('value', 'value', availableColumns),
+      this.renderFormSelectInput('pivot', 'pivot', ['', ...availableColumns]),
+    ];
+  }
+
+  private renderFormSelectInput<K extends keyof ConfigurationOptions>(
+    name: string,
+    optionKey: K,
+    options: ReadonlyArray<string>,
+  ) {
+    return [
+      m(FormLabel, {for: name}, name),
+      m(
+        Select,
+        {
+          id: name,
+          oninput: (e: Event) => {
+            if (!e.target) return;
+            this.options[optionKey] = (e.target as HTMLSelectElement).value;
           },
-          options,
+          value: this.options[optionKey],
+        },
+        options.map((opt) =>
+          m('option', {selected: this.options[optionKey] === opt}, opt),
         ),
-      ];
-    };
+      ),
+    ];
+  }
 
-    return m(
-      Form,
-      {
-        onSubmit: () => {
-          switch (this.trackType) {
-            case 'slice':
-              const sliceColumns: SliceColumnMapping = {
-                ts: this.renderParams.ts,
-                dur: this.renderParams.dur,
-                name: this.renderParams.name,
-              };
-              if (this.renderParams.pivot) {
-                addPivotedTracks(
-                  vnode.attrs.trace,
-                  vnode.attrs.dataSource,
-                  this.name,
-                  this.renderParams.pivot,
-                  async (ctx, data, trackName) =>
-                    addDebugSliceTrack({
-                      trace: ctx,
-                      data,
-                      title: trackName,
-                      columns: sliceColumns,
-                      argColumns: this.columns,
-                    }),
-                );
-              } else {
-                addDebugSliceTrack({
-                  trace: vnode.attrs.trace,
-                  data: vnode.attrs.dataSource,
-                  title: this.name,
-                  columns: sliceColumns,
-                  argColumns: this.columns,
-                });
-              }
-              break;
-            case 'counter':
-              const counterColumns: CounterColumnMapping = {
-                ts: this.renderParams.ts,
-                value: this.renderParams.value,
-              };
-
-              if (this.renderParams.pivot) {
-                addPivotedTracks(
-                  vnode.attrs.trace,
-                  vnode.attrs.dataSource,
-                  this.name,
-                  this.renderParams.pivot,
-                  async (ctx, data, trackName) =>
-                    addDebugCounterTrack({
-                      trace: ctx,
-                      data,
-                      title: trackName,
-                      columns: counterColumns,
-                    }),
-                );
-              } else {
-                addDebugCounterTrack({
-                  trace: vnode.attrs.trace,
-                  data: vnode.attrs.dataSource,
-                  title: this.name,
-                  columns: counterColumns,
-                });
-              }
-              break;
-          }
-        },
-        submitLabel: 'Show',
-      },
-      m(FormLabel, {for: 'track_name'}, 'Track name'),
-      m(TextInput, {
-        id: 'track_name',
-        ref: TRACK_NAME_FIELD_REF,
-        onkeydown: (e: KeyboardEvent) => {
-          // Allow Esc to close popup.
-          if (e.key === 'Escape') return;
-        },
-        oninput: (e: KeyboardEvent) => {
-          if (!e.target) return;
-          this.name = (e.target as HTMLInputElement).value;
-        },
-      }),
-      m(FormLabel, {for: 'track_type'}, 'Track type'),
-      this.renderTrackTypeSelect(),
-      renderSelect('ts'),
-      this.trackType === 'slice' && renderSelect('dur'),
-      this.trackType === 'slice' && renderSelect('name'),
-      this.trackType === 'counter' && renderSelect('value'),
-      renderSelect('pivot'),
-    );
+  private createTracks(attrs: AddDebugTrackMenuAttrs) {
+    switch (this.trackType) {
+      case 'slice':
+        addDebugSliceTrack({
+          trace: attrs.trace,
+          data: {
+            sqlSource: attrs.query,
+            columns: attrs.availableColumns,
+          },
+          title: this.trackName,
+          columns: {
+            ts: this.options.ts,
+            dur: this.options.dur,
+            name: this.options.name,
+          },
+          argSetIdColumn: this.options.argSetId,
+          argColumns: attrs.availableColumns,
+          pivotOn: this.options.pivot,
+        });
+        break;
+      case 'counter':
+        addDebugCounterTrack({
+          trace: attrs.trace,
+          data: {
+            sqlSource: attrs.query,
+            columns: attrs.availableColumns,
+          },
+          title: this.trackName,
+          columns: {
+            ts: this.options.ts,
+            value: this.options.value,
+          },
+          pivotOn: this.options.pivot,
+        });
+        break;
+      default:
+        assertUnreachable(this.trackType);
+    }
   }
 }

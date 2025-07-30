@@ -48,6 +48,7 @@ import {removeFalsyValues} from './array_utils';
 import {DisposableStack} from './disposable_stack';
 import {bindEventListener, CSSCursor} from './dom_utils';
 import {Point2D, Rect2D, Size2D, Vector2D} from './geom';
+import {convertTouchIntoMouseEvents} from './touchscreen_handler';
 
 export interface DragEvent {
   // The location of the mouse at the start of the drag action.
@@ -141,13 +142,20 @@ export class ZonedInteractionHandler implements Disposable {
   private currentGesture?: InProgressGesture;
   private shiftHeld = false;
 
-  constructor(private readonly target: HTMLElement) {
+  constructor(readonly target: HTMLElement) {
     this.bindEvent(this.target, 'mousedown', this.onMouseDown.bind(this));
     this.bindEvent(document, 'mousemove', this.onMouseMove.bind(this));
     this.bindEvent(document, 'mouseup', this.onMouseUp.bind(this));
     this.bindEvent(document, 'keydown', this.onKeyDown.bind(this));
     this.bindEvent(document, 'keyup', this.onKeyUp.bind(this));
     this.bindEvent(this.target, 'wheel', this.handleWheel.bind(this));
+    this.trash.use(
+      convertTouchIntoMouseEvents(this.target, [
+        'down-up-move',
+        'pan-x',
+        'pinch-zoom-as-ctrl-wheel',
+      ]),
+    );
   }
 
   [Symbol.dispose](): void {

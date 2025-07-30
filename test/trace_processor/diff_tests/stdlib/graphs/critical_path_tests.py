@@ -18,6 +18,7 @@ from python.generators.diff_tests.testing import Csv
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import TestSuite
 
+
 class CriticalPathTests(TestSuite):
 
   def test_critical_path_empty(self):
@@ -56,7 +57,8 @@ class CriticalPathTests(TestSuite):
           SELECT * FROM _critical_path!(
             (SELECT *, source_node_id - dest_node_id AS edge_weight FROM edge),
             root
-          );
+          )
+          ORDER BY parent_id;
         """,
         out=Csv("""
         "root_id","parent_id","id"

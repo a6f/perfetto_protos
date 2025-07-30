@@ -14,7 +14,7 @@
 
 import protos from '../protos';
 import {defer, Deferred} from '../base/deferred';
-import {assertExists, assertTrue} from '../base/logging';
+import {assertExists, assertTrue, assertUnreachable} from '../base/logging';
 import {ProtoRingBuffer} from './proto_ring_buffer';
 import {
   createQueryResult,
@@ -42,9 +42,25 @@ export interface TraceProcessorConfig {
   ftraceDropUntilAllCpusValid: boolean;
 }
 
+const QUERY_LOG_BUFFER_SIZE = 100;
+
+interface QueryLog {
+  readonly tag?: string;
+  readonly query: string;
+  readonly startTime: number;
+  readonly endTime?: number;
+  readonly success?: boolean;
+}
+
 export interface Engine {
   readonly mode: EngineMode;
   readonly engineId: string;
+
+  /**
+   * A list of the most recent queries along with their start times, end times
+   * and success status (if completed).
+   */
+  readonly queryLog: ReadonlyArray<QueryLog>;
 
   /**
    * Execute a query against the database, returning a promise that resolves
@@ -84,8 +100,19 @@ export interface Engine {
     format: 'json' | 'prototext' | 'proto',
   ): Promise<string | Uint8Array>;
 
+  summarizeTrace(
+    summarySpecs: protos.TraceSummarySpec[] | string[],
+    metricIds: string[] | undefined,
+    metadataId: string | undefined,
+    format: 'prototext' | 'proto',
+  ): Promise<protos.TraceSummaryResult>;
+
   enableMetatrace(categories?: protos.MetatraceCategories): void;
   stopAndGetMetatrace(): Promise<protos.DisableAndReadMetatraceResult>;
+
+  analyzeStructuredQuery(
+    structuredQueries: protos.PerfettoSqlStructuredQuery[],
+  ): Promise<protos.AnalyzeStructuredQueryResult>;
 
   getProxy(tag: string): EngineProxy;
   readonly numRequestsPending: number;
@@ -117,9 +144,16 @@ export abstract class EngineBase implements Engine, Disposable {
   private pendingComputeMetrics = new Array<Deferred<string | Uint8Array>>();
   private pendingReadMetatrace?: Deferred<protos.DisableAndReadMetatraceResult>;
   private pendingRegisterSqlPackage?: Deferred<void>;
+  private pendingAnalyzeStructuredQueries?: Deferred<protos.AnalyzeStructuredQueryResult>;
+  private pendingTraceSummary?: Deferred<protos.TraceSummaryResult>;
   private _isMetatracingEnabled = false;
   private _numRequestsPending = 0;
   private _failed: string | undefined = undefined;
+  private _queryLog: Array<QueryLog> = [];
+
+  get queryLog(): ReadonlyArray<QueryLog> {
+    return this._queryLog;
+  }
 
   // TraceController sets this to raf.scheduleFullRedraw().
   onResponseReceived?: () => void;
@@ -273,6 +307,21 @@ export abstract class EngineBase implements Engine, Disposable {
           res.resolve();
         }
         break;
+      case TPM.TPM_SUMMARIZE_TRACE:
+        const summaryRes = assertExists(
+          rpc.traceSummaryResult,
+        ) as protos.TraceSummaryResult;
+        assertExists(this.pendingTraceSummary).resolve(summaryRes);
+        this.pendingTraceSummary = undefined;
+        break;
+      case TPM.TPM_ANALYZE_STRUCTURED_QUERY:
+        const analyzeRes = assertExists(
+          rpc.analyzeStructuredQueryResult,
+        ) as {} as protos.AnalyzeStructuredQueryResult;
+        const x = assertExists(this.pendingAnalyzeStructuredQueries);
+        x.resolve(analyzeRes);
+        this.pendingAnalyzeStructuredQueries = undefined;
+        break;
       default:
         console.log(
           'Unexpected TraceProcessor response received: ',
@@ -376,6 +425,54 @@ export abstract class EngineBase implements Engine, Disposable {
     return asyncRes;
   }
 
+  summarizeTrace(
+    summarySpecs: protos.TraceSummarySpec[] | string[],
+    metricIds: string[] | undefined,
+    metadataId: string | undefined,
+    format: 'prototext' | 'proto',
+  ): Promise<protos.TraceSummaryResult> {
+    if (this.pendingTraceSummary) {
+      return Promise.reject(new Error('Already summarizing trace'));
+    }
+    if (summarySpecs.length === 0) {
+      return Promise.reject(new Error('No summary specs provided'));
+    }
+    const result = defer<protos.TraceSummaryResult>();
+    const rpc = protos.TraceProcessorRpc.create();
+    rpc.request = TPM.TPM_SUMMARIZE_TRACE;
+    const args = (rpc.traceSummaryArgs = new protos.TraceSummaryArgs());
+    const computationSpec = new protos.TraceSummaryArgs.ComputationSpec();
+    if (metricIds) {
+      computationSpec.metricIds = metricIds;
+    } else {
+      computationSpec.runAllMetrics = true;
+    }
+    if (metadataId) {
+      computationSpec.metadataQueryId = metadataId;
+    }
+    args.computationSpec = computationSpec;
+
+    if (typeof summarySpecs[0] === 'string') {
+      args.textprotoSpecs = summarySpecs as string[];
+    } else {
+      args.protoSpecs = summarySpecs as protos.TraceSummarySpec[];
+    }
+
+    switch (format) {
+      case 'prototext':
+        args.outputFormat = protos.TraceSummaryArgs.Format.TEXTPROTO;
+        break;
+      case 'proto':
+        args.outputFormat = protos.TraceSummaryArgs.Format.BINARY_PROTOBUF;
+        break;
+      default:
+        assertUnreachable(format);
+    }
+    this.pendingTraceSummary = result;
+    this.rpcSendRequest(rpc);
+    return result;
+  }
+
   // Issues a streaming query and retrieve results in batches.
   // The returned QueryResult object will be populated over time with batches
   // of rows (each batch conveys ~128KB of data and a variable number of rows).
@@ -414,13 +511,32 @@ export abstract class EngineBase implements Engine, Disposable {
     return result;
   }
 
+  private logQueryStart(
+    query: string,
+    tag?: string,
+  ): {
+    endTime?: number;
+    success?: boolean;
+  } {
+    const startTime = performance.now();
+    const queryLog: QueryLog = {query, tag, startTime};
+    this._queryLog.push(queryLog);
+    if (this._queryLog.length > QUERY_LOG_BUFFER_SIZE) {
+      this._queryLog.shift();
+    }
+    return queryLog;
+  }
+
   // Wraps .streamingQuery(), captures errors and re-throws with current stack.
   //
   // Note: This function is less flexible than .execute() as it only returns a
   // promise which must be unwrapped before the QueryResult may be accessed.
   async query(sqlQuery: string, tag?: string): Promise<QueryResult> {
+    const queryLog = this.logQueryStart(sqlQuery);
     try {
-      return await this.streamingQuery(sqlQuery, tag);
+      const result = await this.streamingQuery(sqlQuery, tag);
+      queryLog.success = true;
+      return result;
     } catch (e) {
       // Replace the error's stack trace with the one from here
       // Note: It seems only V8 can trace the stack up the promise chain, so its
@@ -428,7 +544,10 @@ export abstract class EngineBase implements Engine, Disposable {
       // See
       // https://docs.google.com/document/d/13Sy_kBIJGP0XT34V1CV3nkWya4TwYx9L3Yv45LdGB6Q
       captureStackTrace(e);
+      queryLog.success = false;
       throw e;
+    } finally {
+      queryLog.endTime = performance.now();
     }
   }
 
@@ -481,7 +600,7 @@ export abstract class EngineBase implements Engine, Disposable {
     modules: {name: string; sql: string}[];
   }): Promise<void> {
     if (this.pendingRegisterSqlPackage) {
-      return Promise.reject(new Error('Already finalising a metatrace'));
+      return Promise.reject(new Error('Already registering SQL package'));
     }
 
     const result = defer<void>();
@@ -494,6 +613,23 @@ export abstract class EngineBase implements Engine, Disposable {
     args.modules = pkg.modules;
     args.allowOverride = true;
     this.pendingRegisterSqlPackage = result;
+    this.rpcSendRequest(rpc);
+    return result;
+  }
+
+  analyzeStructuredQuery(
+    structuredQueries: protos.PerfettoSqlStructuredQuery[],
+  ): Promise<protos.AnalyzeStructuredQueryResult> {
+    if (this.pendingAnalyzeStructuredQueries) {
+      return Promise.reject(new Error('Already analyzing structured queries'));
+    }
+    const result = defer<protos.AnalyzeStructuredQueryResult>();
+    const rpc = protos.TraceProcessorRpc.create();
+    rpc.request = TPM.TPM_ANALYZE_STRUCTURED_QUERY;
+    const args = (rpc.analyzeStructuredQueryArgs =
+      new protos.AnalyzeStructuredQueryArgs());
+    args.queries = structuredQueries;
+    this.pendingAnalyzeStructuredQueries = result;
     this.rpcSendRequest(rpc);
     return result;
   }
@@ -541,6 +677,10 @@ export class EngineProxy implements Engine, Disposable {
   private tag: string;
   private disposed = false;
 
+  get queryLog() {
+    return this.engine.queryLog;
+  }
+
   constructor(engine: EngineBase, tag: string) {
     this.engine = engine;
     this.tag = tag;
@@ -573,12 +713,32 @@ export class EngineProxy implements Engine, Disposable {
     return this.engine.computeMetric(metrics, format);
   }
 
+  summarizeTrace(
+    summarySpecs: protos.TraceSummarySpec[] | string[],
+    metricIds: string[] | undefined,
+    metadataId: string | undefined,
+    format: 'prototext' | 'proto',
+  ): Promise<protos.TraceSummaryResult> {
+    return this.engine.summarizeTrace(
+      summarySpecs,
+      metricIds,
+      metadataId,
+      format,
+    );
+  }
+
   enableMetatrace(categories?: protos.MetatraceCategories): void {
     this.engine.enableMetatrace(categories);
   }
 
   stopAndGetMetatrace(): Promise<protos.DisableAndReadMetatraceResult> {
     return this.engine.stopAndGetMetatrace();
+  }
+
+  analyzeStructuredQuery(
+    structuredQueries: protos.PerfettoSqlStructuredQuery[],
+  ): Promise<protos.AnalyzeStructuredQueryResult> {
+    return this.engine.analyzeStructuredQuery(structuredQueries);
   }
 
   get engineId(): string {

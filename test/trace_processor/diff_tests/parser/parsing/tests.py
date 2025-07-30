@@ -956,17 +956,17 @@ class Parsing(TestSuite):
         query="""
         INCLUDE PERFETTO MODULE android.process_metadata;
 
-        SELECT upid, process_name, uid, shared_uid, package_name, version_code
+        SELECT upid, process_name, uid, shared_uid, package_name, version_code, is_kernel_task
         FROM android_process_metadata
         WHERE upid != 0;
         """,
         out=Csv("""
-        "upid","process_name","uid","shared_uid","package_name","version_code"
-        1,"init",0,"[NULL]","[NULL]","[NULL]"
-        2,"system_server",1000,"[NULL]","[NULL]","[NULL]"
-        3,"com.google.android.gms",10100,1,"com.google.android.gms",1234
-        4,"com.google.android.gms.persistent",10100,1,"com.google.android.gms",1234
-        5,"com.google.android.gms",10100,1,"com.google.android.gms",1234
+        "upid","process_name","uid","shared_uid","package_name","version_code","is_kernel_task"
+        1,"init",0,"[NULL]","[NULL]","[NULL]",1
+        2,"system_server",1000,"[NULL]","[NULL]","[NULL]",0
+        3,"com.google.android.gms",10100,1,"com.google.android.gms",1234,0
+        4,"com.google.android.gms.persistent",10100,1,"com.google.android.gms",1234,0
+        5,"com.google.android.gms",10100,1,"com.google.android.gms",1234,0
         """))
 
   # Flow events importing from json
@@ -1751,3 +1751,59 @@ class Parsing(TestSuite):
         "utid","tid","name"
         0,0,"swapper"
         """))
+
+  # Slice nesting with same timestamps and zero duration.
+  def test_same_ts_zero_duration_slice_nesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 0,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",0
+        "Slice 2",1
+        '''))
+
+  # Slice unnesting with same timestamps and non-zero duration.
+  def test_same_ts_non_zero_duration_slice_unnesting(self):
+    return DiffTestBlueprint(
+        trace=Json('''[
+          {
+            "name": "Slice 1",
+            "ph": "X",
+            "ts": 1000,
+            "dur": 100,
+            "pid": 1,
+            "tid": 1
+          },
+          {
+            "name": "Slice 2",
+            "ph": "X",
+            "ts": 1100,
+            "dur": 100,
+            "pid": 1,
+            "tid": 1
+          }
+        ]'''),
+        query="SELECT name, depth FROM slice ORDER BY name",
+        out=Csv('''
+        "name","depth"
+        "Slice 1",0
+        "Slice 2",0
+        '''))

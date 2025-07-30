@@ -21,7 +21,13 @@ perfetto_proto_library("@TYPE@") {
     "lite",
     "zero",
   ]
-  deps = [ "../common:@TYPE@" ]  # needed for descriptor.proto.
+
+  # needed for descriptor.proto.
+  deps = [
+    "../common:@TYPE@",
+    "../perfetto_sql:@TYPE@",
+    "../trace_summary:@TYPE@",
+  ]
   sources = []
   foreach(source, trace_processor_protos) {
     sources += [ "$source.proto" ]

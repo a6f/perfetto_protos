@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {time} from '../base/time';
+import {Cpu} from '../base/multi_machine_trace';
 
 export interface TraceInfo {
   readonly traceTitle: string; // File name and size of the current trace.
@@ -24,18 +25,13 @@ export interface TraceInfo {
   // This is the ts value at the time of the Unix epoch.
   // Normally some large negative value, because the unix epoch is normally in
   // the past compared to ts=0.
-  readonly realtimeOffset: time;
+  readonly unixOffset: time;
 
-  // This is the timestamp that we should use for our offset when in UTC mode.
-  // Usually the most recent UTC midnight compared to the trace start time.
-  readonly utcOffset: time;
-
-  // Trace TZ is like UTC but keeps into account also the timezone_off_mins
-  // recorded into the trace, to show timestamps in the device local time.
-  readonly traceTzOffset: time;
+  // Represents the reported timezone in minutes from UTC.
+  readonly tzOffMin: number;
 
   // The list of CPUs in the trace
-  readonly cpus: number[];
+  readonly cpus: Cpu[];
 
   // The number of import/analysis errors present in the `stats` table.
   readonly importErrors: number;

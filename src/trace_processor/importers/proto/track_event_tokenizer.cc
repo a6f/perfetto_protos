@@ -49,6 +49,7 @@
 #include "src/trace_processor/storage/stats.h"
 #include "src/trace_processor/storage/trace_storage.h"
 
+#include "perfetto/ext/base/status_macros.h"
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
 #include "protos/perfetto/trace/trace_packet.pbzero.h"
 #include "protos/perfetto/trace/track_event/counter_descriptor.pbzero.h"
@@ -58,7 +59,6 @@
 #include "protos/perfetto/trace/track_event/track_descriptor.pbzero.h"
 #include "protos/perfetto/trace/track_event/track_event.pbzero.h"
 #include "src/trace_processor/types/variadic.h"
-#include "src/trace_processor/util/status_macros.h"
 
 namespace perfetto::trace_processor {
 
@@ -364,8 +364,12 @@ ModuleResult TrackEventTokenizer::TokenizeTrackEventPacket(
   if (PERFETTO_UNLIKELY(event.has_legacy_event())) {
     protos::pbzero::TrackEvent::LegacyEvent::Decoder leg(event.legacy_event());
     if (PERFETTO_UNLIKELY(leg.phase() == 'P')) {
-      RETURN_IF_ERROR(TokenizeLegacySampleEvent(
-          event, leg, *data.trace_packet_data.sequence_state));
+      base::Status status = TokenizeLegacySampleEvent(
+          event, leg, *data.trace_packet_data.sequence_state);
+      if (!status.ok()) {
+        context_->storage->IncrementStats(
+            stats::legacy_v8_cpu_profile_invalid_sample);
+      }
     }
   }
 
@@ -563,7 +567,7 @@ base::Status TrackEventTokenizer::TokenizeLegacySampleEvent(
       base::Status status =
           context_->legacy_v8_cpu_profile_tracker->AddCallsite(
               legacy.unscoped_id(), static_cast<uint32_t>(state.pid()), node_id,
-              parent_node_id, url, function_name);
+              parent_node_id, url, function_name, {});
       if (!status.ok()) {
         context_->storage->IncrementStats(
             stats::legacy_v8_cpu_profile_invalid_callsite);

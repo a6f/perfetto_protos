@@ -14,7 +14,7 @@
 
 import m from 'mithril';
 import {Duration, duration, Time, time} from '../../base/time';
-import {hasArgs, renderArguments} from '../../components/details/slice_args';
+import {hasArgs} from '../../components/details/args';
 import {renderDetails} from '../../components/details/slice_details';
 import {
   getDescendantSliceTree,
@@ -45,9 +45,10 @@ import {
 } from './scroll_jank_cause_link_utils';
 import {ScrollJankCauseMap} from './scroll_jank_cause_map';
 import {sliceRef} from '../../components/widgets/slice';
-import {JANKS_TRACK_URI, renderSliceRef} from './selection_utils';
+import {JANKS_TRACK_URI, renderSliceRef} from './utils';
 import {TrackEventDetailsPanel} from '../../public/details_panel';
 import {Trace} from '../../public/trace';
+import {renderSliceArguments} from '../../components/details/slice_args';
 
 // Given a node in the slice tree, return a path from root to it.
 function getPath(slice: SliceTreeNode): string[] {
@@ -530,7 +531,7 @@ export class EventLatencySliceDetailsPanel implements TrackEventDetailsPanel {
               m(
                 Section,
                 {title: 'Arguments'},
-                m(Tree, renderArguments(this.trace, slice.args)),
+                m(Tree, renderSliceArguments(this.trace, slice.args)),
               ),
           ),
           m(GridLayoutColumn, rightSideWidgets),

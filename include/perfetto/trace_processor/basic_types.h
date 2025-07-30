@@ -22,6 +22,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -304,6 +305,88 @@ struct SqlPackage {
   // when creating TraceProcessor) is true. Otherwise, this option will throw an
   // error.
   bool allow_override = false;
+};
+
+// Struct which defines how the trace should be summarized by
+// `TraceProcessor::Summarize`.
+struct TraceSummaryComputationSpec {
+  // The set of metric ids which should be computed and returned in the
+  // `TraceSummary` proto.
+  // If `nullopt`, all metrics will be computed.
+  // If empty, no metrics will be computed.
+  std::optional<std::vector<std::string>> v2_metric_ids;
+
+  // The id of the query (which must exist in the `query` field of one of the
+  // TraceSummary specs) which will be used to populate the `metadata` field of
+  // the TraceSummary proto. This query *must* output exactly two string columns
+  // `key` and `value` which will be used to populate the `metadata` field of
+  // the output proto.
+  std::optional<std::string> metadata_query_id;
+};
+
+// A struct which defines the how the TraceSummary output proto should be
+// formatted.
+struct TraceSummaryOutputSpec {
+  // The file format of the output returned from the trace summary functions.
+  enum class Format : uint8_t {
+    // Indicates that the ouput is `TraceSummary` encoded as a binary protobuf.
+    kBinaryProto,
+    // Indicates that the ouput is `TraceSummary` encoded as a text protobuf.
+    kTextProto,
+  };
+  Format format;
+};
+
+// A struct wrapping the bytes of a `TraceSummarySpec` instance.
+struct TraceSummarySpecBytes {
+  // The pointer to the contents of `TraceSummarySpec`
+  const uint8_t* ptr;
+
+  // The number of bytes of the `TraceSummarySpec.
+  size_t size;
+
+  // The format of the data located at the pointer above.
+  enum class Format : uint8_t {
+    // Indicates that the spec is `TraceSummarySpec` encoded as a binary
+    // protobuf.
+    kBinaryProto,
+    // Indicates that the spec is `TraceSummarySpec` encoded as a text
+    // protobuf.
+    kTextProto,
+  };
+  Format format;
+};
+
+// A struct wrapping the bytes of a `StructuredQuery` instance.
+struct StructuredQueryBytes {
+  // The pointer to the contents of `StructuredQuery`
+  const uint8_t* ptr;
+
+  // The number of bytes of the `StructuredQuery.
+  size_t size;
+
+  // The format of the data located at the pointer above.
+  enum class Format : uint8_t {
+    // Indicates that the spec is `StructuredQuery` encoded as a binary
+    // protobuf.
+    kBinaryProto,
+    // Indicates that the spec is `StructuredQuery` encoded as a text
+    // protobuf.
+    kTextProto,
+  };
+  Format format;
+};
+
+// Experimental. Not considered part of Trace Processor API and shouldn't be
+// used.
+struct AnalyzedStructuredQuery {
+  std::string sql;
+  std::string textproto;
+
+  // Modules referenced by sql
+  std::vector<std::string> modules;
+  // Preambles referenced by sql
+  std::vector<std::string> preambles;
 };
 
 // Deprecated. Please use `RegisterSqlPackage` and `SqlPackage` instead.

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {assertTrue} from '../base/logging';
+import {errResult, okResult, Result} from '../base/result';
 
 export interface WorkspaceManager {
   // This is the same of ctx.workspace, exposed for consistency also here.
@@ -38,9 +39,7 @@ let sessionUniqueIdCounter = 0;
  * everywhere where session-unique ids are required.
  */
 function createSessionUniqueId(): string {
-  // Return the counter in base36 (0-z) to keep the string as short as possible
-  // but still human readable.
-  return (sessionUniqueIdCounter++).toString(36);
+  return (sessionUniqueIdCounter++).toString();
 }
 
 /**
@@ -65,8 +64,7 @@ function createSessionUniqueId(): string {
  */
 
 export interface TrackNodeArgs {
-  title: string;
-  id: string;
+  name: string;
   uri: string;
   headless: boolean;
   sortOrder: number;
@@ -88,13 +86,13 @@ export class TrackNode {
   // A human readable string for this track - displayed in the track shell.
   // TODO(stevegolton): Make this optional, so that if we implement a string for
   // this track then we can implement it here as well.
-  public title: string;
+  public name: string;
 
   // The URI of the track content to display here.
   public uri?: string;
 
   // Optional sort order, which workspaces may or may not take advantage of for
-  // sorting when displaying the workspace.
+  // sorting when displaying the workspace. Higher numbers appear first.
   public sortOrder?: number;
 
   // Don't show the header at all for this track, just show its un-nested
@@ -128,8 +126,7 @@ export class TrackNode {
 
   constructor(args?: Partial<TrackNodeArgs>) {
     const {
-      title = '',
-      id = createSessionUniqueId(),
+      name = '',
       uri,
       headless = false,
       sortOrder,
@@ -138,10 +135,10 @@ export class TrackNode {
       removable = false,
     } = args ?? {};
 
-    this.id = id;
+    this.id = createSessionUniqueId();
     this.uri = uri;
     this.headless = headless;
-    this.title = title;
+    this.name = name;
     this.sortOrder = sortOrder;
     this.isSummary = isSummary;
     this._collapsed = collapsed;
@@ -242,7 +239,6 @@ export class TrackNode {
    */
   expand(): void {
     this._collapsed = false;
-    this.fireOnChangeListener();
   }
 
   /**
@@ -251,7 +247,6 @@ export class TrackNode {
    */
   collapse(): void {
     this._collapsed = true;
-    this.fireOnChangeListener();
   }
 
   /**
@@ -259,7 +254,6 @@ export class TrackNode {
    */
   toggleCollapsed(): void {
     this._collapsed = !this._collapsed;
-    this.fireOnChangeListener();
   }
 
   /**
@@ -283,20 +277,16 @@ export class TrackNode {
    * omitted.
    */
   get fullPath(): ReadonlyArray<string> {
-    let fullPath = [this.title];
+    let fullPath = [this.name];
     let parent = this.parent;
     while (parent) {
       // Ignore headless containers as they don't appear in the tree...
-      if (!parent.headless && parent.title !== '') {
-        fullPath = [parent.title, ...fullPath];
+      if (!parent.headless && parent.name !== '') {
+        fullPath = [parent.name, ...fullPath];
       }
       parent = parent.parent;
     }
     return fullPath;
-  }
-
-  protected fireOnChangeListener(): void {
-    this.workspace?.onchange(this.workspace);
   }
 
   /**
@@ -323,14 +313,14 @@ export class TrackNode {
    *
    * @param child - The child node to add.
    */
-  addChildInOrder(child: TrackNode): void {
+  addChildInOrder(child: TrackNode): Result {
     const insertPoint = this._children.find(
       (n) => (n.sortOrder ?? 0) > (child.sortOrder ?? 0),
     );
     if (insertPoint) {
-      this.addChildBefore(child, insertPoint);
+      return this.addChildBefore(child, insertPoint);
     } else {
-      this.addChildLast(child);
+      return this.addChildLast(child);
     }
   }
 
@@ -339,10 +329,11 @@ export class TrackNode {
    *
    * @param child The new child node to add.
    */
-  addChildLast(child: TrackNode): void {
-    this.adopt(child);
+  addChildLast(child: TrackNode): Result {
+    const result = this.adopt(child);
+    if (!result.ok) return result;
     this._children.push(child);
-    this.fireOnChangeListener();
+    return result;
   }
 
   /**
@@ -350,10 +341,11 @@ export class TrackNode {
    *
    * @param child The child node to add.
    */
-  addChildFirst(child: TrackNode): void {
-    this.adopt(child);
+  addChildFirst(child: TrackNode): Result {
+    const result = this.adopt(child);
+    if (!result.ok) return result;
     this._children.unshift(child);
-    this.fireOnChangeListener();
+    return result;
   }
 
   /**
@@ -363,16 +355,19 @@ export class TrackNode {
    * @param referenceNode An existing child node. The new node will be added
    * before this node.
    */
-  addChildBefore(child: TrackNode, referenceNode: TrackNode): void {
-    if (child === referenceNode) return;
+  addChildBefore(child: TrackNode, referenceNode: TrackNode): Result {
+    // Nodes are the same, nothing to do.
+    if (child === referenceNode) return okResult();
 
     assertTrue(this.children.includes(referenceNode));
 
-    this.adopt(child);
+    const result = this.adopt(child);
+    if (!result.ok) return result;
 
     const indexOfReference = this.children.indexOf(referenceNode);
     this._children.splice(indexOfReference, 0, child);
-    this.fireOnChangeListener();
+
+    return okResult();
   }
 
   /**
@@ -382,16 +377,19 @@ export class TrackNode {
    * @param referenceNode An existing child node. The new node will be added
    * after this node.
    */
-  addChildAfter(child: TrackNode, referenceNode: TrackNode): void {
-    if (child === referenceNode) return;
+  addChildAfter(child: TrackNode, referenceNode: TrackNode): Result {
+    // Nodes are the same, nothing to do.
+    if (child === referenceNode) return okResult();
 
     assertTrue(this.children.includes(referenceNode));
 
-    this.adopt(child);
+    const result = this.adopt(child);
+    if (!result.ok) return result;
 
     const indexOfReference = this.children.indexOf(referenceNode);
     this._children.splice(indexOfReference + 1, 0, child);
-    this.fireOnChangeListener();
+
+    return okResult();
   }
 
   /**
@@ -404,7 +402,6 @@ export class TrackNode {
     child._parent = undefined;
     this.removeFromIndex(child);
     this.propagateRemoval(child);
-    this.fireOnChangeListener();
   }
 
   /**
@@ -439,7 +436,6 @@ export class TrackNode {
   clear(): void {
     this._children = [];
     this.tracksById.clear();
-    this.fireOnChangeListener();
   }
 
   /**
@@ -482,13 +478,21 @@ export class TrackNode {
     return cloned;
   }
 
-  private adopt(child: TrackNode): void {
+  private adopt(child: TrackNode): Result {
+    if (child === this || child.getTrackById(this.id)) {
+      return errResult(
+        'Cannot move track into itself or one of its descendants',
+      );
+    }
+
     if (child.parent) {
       child.parent.removeChild(child);
     }
     child._parent = this;
     this.addToIndex(child);
     this.propagateAddition(child);
+
+    return okResult();
   }
 
   private addToIndex(child: TrackNode) {
@@ -536,7 +540,7 @@ export class TrackNode {
 export class Workspace {
   public title = '<untitled-workspace>';
   public readonly id: string;
-  onchange: (w: Workspace) => void = () => {};
+  public userEditable: boolean = true;
 
   // Dummy node to contain the pinned tracks
   public readonly pinnedTracksNode = new TrackNode();
@@ -571,7 +575,7 @@ export class Workspace {
     // Make a lightweight clone of this track - just the uri and the title.
     const cloned = new TrackNode({
       uri: track.uri,
-      title: track.title,
+      name: track.name,
       removable: track.removable,
     });
     this.pinnedTracksNode.addChildLast(cloned);
@@ -639,8 +643,8 @@ export class Workspace {
    *
    * @param child - The child node to add.
    */
-  addChildInOrder(child: TrackNode): void {
-    this.tracks.addChildInOrder(child);
+  addChildInOrder(child: TrackNode): Result {
+    return this.tracks.addChildInOrder(child);
   }
 
   /**
@@ -648,8 +652,8 @@ export class Workspace {
    *
    * @param child The new child node to add.
    */
-  addChildLast(child: TrackNode): void {
-    this.tracks.addChildLast(child);
+  addChildLast(child: TrackNode): Result {
+    return this.tracks.addChildLast(child);
   }
 
   /**
@@ -657,8 +661,8 @@ export class Workspace {
    *
    * @param child The child node to add.
    */
-  addChildFirst(child: TrackNode): void {
-    this.tracks.addChildFirst(child);
+  addChildFirst(child: TrackNode): Result {
+    return this.tracks.addChildFirst(child);
   }
 
   /**
@@ -668,8 +672,8 @@ export class Workspace {
    * @param referenceNode An existing child node. The new node will be added
    * before this node.
    */
-  addChildBefore(child: TrackNode, referenceNode: TrackNode): void {
-    this.tracks.addChildBefore(child, referenceNode);
+  addChildBefore(child: TrackNode, referenceNode: TrackNode): Result {
+    return this.tracks.addChildBefore(child, referenceNode);
   }
 
   /**
@@ -679,8 +683,8 @@ export class Workspace {
    * @param referenceNode An existing child node. The new node will be added
    * after this node.
    */
-  addChildAfter(child: TrackNode, referenceNode: TrackNode): void {
-    this.tracks.addChildAfter(child, referenceNode);
+  addChildAfter(child: TrackNode, referenceNode: TrackNode): Result {
+    return this.tracks.addChildAfter(child, referenceNode);
   }
 
   /**

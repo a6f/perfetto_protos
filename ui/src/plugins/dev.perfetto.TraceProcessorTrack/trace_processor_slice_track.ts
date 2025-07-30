@@ -13,126 +13,149 @@
 // limitations under the License.
 
 import {BigintMath as BIMath} from '../../base/bigint_math';
+import {assertTrue} from '../../base/logging';
 import {clamp} from '../../base/math_utils';
+import {exists} from '../../base/utils';
+import {getColorForSlice} from '../../components/colorizer';
+import {ThreadSliceDetailsPanel} from '../../components/details/thread_slice_details_tab';
 import {
-  NAMED_ROW,
-  NamedSliceTrack,
-} from '../../components/tracks/named_slice_track';
-import {SLICE_LAYOUT_FIT_CONTENT_DEFAULTS} from '../../components/tracks/slice_layout';
-import {TrackEventDetails} from '../../public/selection';
+  DatasetSliceTrack,
+  renderTooltip,
+} from '../../components/tracks/dataset_slice_track';
+import {TrackEventDetailsPanel} from '../../public/details_panel';
 import {Trace} from '../../public/trace';
-import {Slice} from '../../public/track';
-import {SourceDataset, Dataset} from '../../trace_processor/dataset';
+import {SourceDataset} from '../../trace_processor/dataset';
+import {Engine} from '../../trace_processor/engine';
 import {
   LONG,
   LONG_NULL,
   NUM,
   NUM_NULL,
-  STR,
+  STR_NULL,
 } from '../../trace_processor/query_result';
+import m from 'mithril';
 
-export const THREAD_SLICE_ROW = {
-  // Base columns (tsq, ts, dur, id, depth).
-  ...NAMED_ROW,
+export interface TraceProcessorSliceTrackAttrs {
+  readonly trace: Trace;
+  readonly uri: string;
+  readonly maxDepth?: number;
+  readonly trackIds: ReadonlyArray<number>;
+  readonly detailsPanel?: (row: {id: number}) => TrackEventDetailsPanel;
+}
 
-  // Thread-specific columns.
-  threadDur: LONG_NULL,
+const schema = {
+  id: NUM,
+  ts: LONG,
+  dur: LONG,
+  name: STR_NULL,
+  depth: NUM,
+  thread_dur: LONG_NULL,
+  category: STR_NULL,
+  correlation_id: STR_NULL,
+  arg_set_id: NUM_NULL,
 };
-export type ThreadSliceRow = typeof THREAD_SLICE_ROW;
 
-export class TraceProcessorSliceTrack extends NamedSliceTrack<
-  Slice,
-  ThreadSliceRow
-> {
-  constructor(
-    trace: Trace,
-    uri: string,
-    maxDepth: number | undefined,
-    private readonly trackIds: number[],
-  ) {
-    super(trace, uri);
-    this.sliceLayout = {
-      ...SLICE_LAYOUT_FIT_CONTENT_DEFAULTS,
-      depthGuess: maxDepth,
-    };
-  }
+export async function createTraceProcessorSliceTrack({
+  trace,
+  uri,
+  maxDepth,
+  trackIds,
+  detailsPanel,
+}: TraceProcessorSliceTrackAttrs) {
+  return new DatasetSliceTrack({
+    trace,
+    uri,
+    dataset: await getDataset(trace.engine, trackIds),
+    sliceName: (row) => (row.name === null ? '[null]' : row.name),
+    initialMaxDepth: maxDepth,
+    rootTableName: 'slice',
+    fillRatio: (row) => {
+      if (row.dur > 0n && row.thread_dur !== null) {
+        return clamp(BIMath.ratio(row.thread_dur, row.dur), 0, 1);
+      } else {
+        return 1;
+      }
+    },
+    tooltip: (slice) => {
+      return renderTooltip(trace, slice, {
+        title: slice.title,
+        extras:
+          exists(slice.row.category) && m('', 'Category: ', slice.row.category),
+      });
+    },
+    detailsPanel: detailsPanel
+      ? (row) => detailsPanel(row)
+      : () => new ThreadSliceDetailsPanel(trace),
+    colorizer: (row) => {
+      if (row.correlation_id) {
+        return getColorForSlice(row.correlation_id);
+      }
+      if (row.name) {
+        return getColorForSlice(row.name);
+      }
+      return getColorForSlice(`${row.id}`);
+    },
+  });
+}
 
-  getRowSpec(): ThreadSliceRow {
-    return THREAD_SLICE_ROW;
-  }
+async function getDataset(engine: Engine, trackIds: ReadonlyArray<number>) {
+  assertTrue(trackIds.length > 0);
 
-  rowToSlice(row: ThreadSliceRow): Slice {
-    const namedSlice = this.rowToSliceBase(row);
-
-    if (row.dur > 0n && row.threadDur !== null) {
-      const fillRatio = clamp(BIMath.ratio(row.threadDur, row.dur), 0, 1);
-      return {...namedSlice, fillRatio};
-    } else {
-      return namedSlice;
-    }
-  }
-
-  getSqlSource(): string {
-    // If we only have one track ID we can avoid the overhead of
-    // experimental_slice_layout, and just go straight to the slice table.
-    if (this.trackIds.length === 1) {
-      return `
-        select
-          ts,
-          dur,
-          id,
-          depth,
-          ifnull(name, '[null]') as name,
-          thread_dur as threadDur
-        from slice
-        where track_id = ${this.trackIds[0]}
-      `;
-    } else {
-      return `
-        select
-          id,
-          ts,
-          dur,
-          layout_depth as depth,
-          ifnull(name, '[null]') as name,
-          thread_dur as threadDur
-        from experimental_slice_layout
-        where filter_track_ids = '${this.trackIds.join(',')}'
-      `;
-    }
-  }
-
-  onUpdatedSlices(slices: Slice[]) {
-    for (const slice of slices) {
-      slice.isHighlighted = slice === this.hoveredSlice;
-    }
-  }
-
-  async getSelectionDetails(
-    id: number,
-  ): Promise<TrackEventDetails | undefined> {
-    const baseDetails = await super.getSelectionDetails(id);
-    if (!baseDetails) return undefined;
-    return {
-      ...baseDetails,
-      tableName: 'slice',
-    };
-  }
-
-  override getDataset(): Dataset {
+  if (trackIds.length === 1) {
     return new SourceDataset({
-      src: `slice`,
+      schema,
+      src: `
+        select
+          slice.id,
+          ts,
+          dur,
+          depth,
+          name,
+          thread_dur,
+          track_id,
+          category,
+          extract_arg(arg_set_id, 'correlation_id') as correlation_id,
+          arg_set_id
+        from slice
+      `,
       filter: {
         col: 'track_id',
-        in: this.trackIds,
+        in: trackIds,
       },
-      schema: {
-        id: NUM,
-        name: STR,
-        ts: LONG,
-        dur: LONG,
-        parent_id: NUM_NULL,
-      },
+    });
+  } else {
+    // If we have more than one trackId, we must use experimental_slice_layout
+    // to work out the depths. However, just using this as the dataset can be
+    // extremely slow. So we cache the depths up front in a new table for this
+    // track.
+    const tableName = `__async_slice_depth_${trackIds[0]}`;
+
+    await engine.query(`
+      create perfetto table ${tableName} as
+      select
+        id,
+        layout_depth as depth
+      from experimental_slice_layout('${trackIds.join(',')}')
+    `);
+
+    // The (inner) join acts as a filter as well as providing the depth.
+    return new SourceDataset({
+      schema,
+      src: `
+        select
+          slice.id,
+          ts,
+          dur,
+          d.depth as depth,
+          name,
+          thread_dur,
+          track_id,
+          category,
+          extract_arg(arg_set_id, 'correlation_id') as correlation_id,
+          arg_set_id
+        from slice
+        join ${tableName} d using (id)
+      `,
     });
   }
 }
